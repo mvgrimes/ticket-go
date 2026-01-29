@@ -3,6 +3,7 @@ package ticket
 import (
 	"bufio"
 	"fmt"
+	"iter"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,7 +12,8 @@ import (
 
 // Store handles ticket storage operations.
 type Store struct {
-	Dir string
+	Dir   string
+	cache *Cache
 }
 
 // FindTicketsDir finds the .tickets directory by walking parent directories.
@@ -47,7 +49,10 @@ func FindTicketsDir() (string, error) {
 // NewStore creates a new store. If the directory doesn't exist and create is true,
 // it will be created when needed.
 func NewStore(dir string) *Store {
-	return &Store{Dir: dir}
+	return &Store{
+		Dir:   dir,
+		cache: NewCache(),
+	}
 }
 
 // EnsureDir creates the tickets directory if it doesn't exist.
@@ -70,7 +75,7 @@ func (s *Store) ResolveID(partial string) (string, error) {
 	}
 
 	// Try partial match (anywhere in filename)
-	entries, err := os.ReadDir(s.Dir)
+	entries, err := s.cache.ReadDir(s.Dir)
 	if err != nil {
 		return "", fmt.Errorf("ticket '%s' not found", partial)
 	}
@@ -112,7 +117,7 @@ func (s *Store) GetTicketPath(partial string) (string, error) {
 // Load loads a ticket from file.
 func (s *Store) Load(id string) (*Ticket, error) {
 	path := s.TicketPath(id)
-	return LoadTicket(path)
+	return s.cache.LoadTicket(path)
 }
 
 // LoadByPartialID loads a ticket by partial ID.
@@ -130,12 +135,13 @@ func (s *Store) Save(t *Ticket) error {
 		return err
 	}
 	path := s.TicketPath(t.ID)
-	return SaveTicket(t, path)
+	return s.cache.SaveTicket(t, path, s.Dir)
 }
 
 // ListTickets returns all tickets in the store.
+// Uses header-only loading for efficiency (body content not loaded).
 func (s *Store) ListTickets() ([]*Ticket, error) {
-	entries, err := os.ReadDir(s.Dir)
+	entries, err := s.cache.ReadDir(s.Dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -150,7 +156,7 @@ func (s *Store) ListTickets() ([]*Ticket, error) {
 		}
 
 		path := filepath.Join(s.Dir, entry.Name())
-		t, err := LoadTicket(path)
+		t, err := s.cache.LoadTicketHeader(path)
 		if err != nil {
 			continue // Skip invalid tickets
 		}
@@ -161,65 +167,67 @@ func (s *Store) ListTickets() ([]*Ticket, error) {
 }
 
 // ListTicketsByMtime returns tickets sorted by modification time (most recent first).
+// Uses iterator for lazy loading - only loads as many tickets as needed for limit.
 func (s *Store) ListTicketsByMtime(limit int) ([]*Ticket, error) {
-	entries, err := os.ReadDir(s.Dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
+	var result []*Ticket
+	for t := range s.TicketsByMtime() {
+		result = append(result, t)
+		if limit > 0 && len(result) >= limit {
+			break
 		}
-		return nil, err
 	}
-
-	type ticketWithMtime struct {
-		ticket *Ticket
-		mtime  int64
-	}
-
-	var tickets []ticketWithMtime
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
-			continue
-		}
-
-		path := filepath.Join(s.Dir, entry.Name())
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-
-		t, err := LoadTicket(path)
-		if err != nil {
-			continue
-		}
-
-		tickets = append(tickets, ticketWithMtime{
-			ticket: t,
-			mtime:  info.ModTime().UnixNano(),
-		})
-	}
-
-	// Sort by mtime descending
-	sort.Slice(tickets, func(i, j int) bool {
-		return tickets[i].mtime > tickets[j].mtime
-	})
-
-	// Apply limit
-	if limit > 0 && len(tickets) > limit {
-		tickets = tickets[:limit]
-	}
-
-	result := make([]*Ticket, len(tickets))
-	for i, t := range tickets {
-		result[i] = t.ticket
-	}
-
 	return result, nil
+}
+
+// TicketsByMtime returns an iterator that yields tickets in mtime order (newest first).
+// Tickets are loaded lazily - iteration stops when consumer breaks.
+func (s *Store) TicketsByMtime() iter.Seq[*Ticket] {
+	return func(yield func(*Ticket) bool) {
+		entries, err := s.cache.ReadDir(s.Dir)
+		if err != nil {
+			return
+		}
+
+		// Get mtime for sorting without loading ticket content
+		type entryMtime struct {
+			entry os.DirEntry
+			mtime int64
+		}
+		var sorted []entryMtime
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+				continue
+			}
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+			sorted = append(sorted, entryMtime{entry, info.ModTime().UnixNano()})
+		}
+
+		// Sort by mtime descending (newest first)
+		sort.Slice(sorted, func(i, j int) bool {
+			return sorted[i].mtime > sorted[j].mtime
+		})
+
+		// Yield tickets lazily
+		for _, e := range sorted {
+			path := filepath.Join(s.Dir, e.entry.Name())
+			t, err := s.cache.LoadTicketHeader(path)
+			if err != nil {
+				continue
+			}
+			if !yield(t) {
+				return // Consumer broke - stop loading
+			}
+		}
+	}
 }
 
 // UpdateField updates a single YAML field in a ticket file.
 func (s *Store) UpdateField(id, field, value string) error {
 	path := s.TicketPath(id)
-	return UpdateYAMLField(path, field, value)
+	return s.cache.UpdateYAMLField(path, field, value)
 }
 
 // Create creates a new ticket with the given options.
@@ -305,16 +313,28 @@ func (s *Store) AddNote(id, note string) error {
 
 	contentStr := string(content)
 
+	// Track what we append for cache update
+	var appended string
+
 	// Add Notes section if missing
 	if !strings.Contains(contentStr, "## Notes") {
-		contentStr += "\n## Notes\n"
+		appended = "\n## Notes\n"
+		contentStr += appended
 	}
 
 	// Append timestamped note
 	timestamp := ISODate()
-	contentStr += fmt.Sprintf("\n**%s**\n\n%s\n", timestamp, note)
+	noteContent := fmt.Sprintf("\n**%s**\n\n%s\n", timestamp, note)
+	contentStr += noteContent
+	appended += noteContent
 
-	return os.WriteFile(path, []byte(contentStr), 0644)
+	if err := os.WriteFile(path, []byte(contentStr), 0644); err != nil {
+		return err
+	}
+
+	// Update cache
+	s.cache.AppendBody(path, appended)
+	return nil
 }
 
 // HasDep checks if a ticket has a specific dependency.

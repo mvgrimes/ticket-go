@@ -1,7 +1,6 @@
 package ticket
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"regexp"
@@ -20,12 +19,288 @@ func LoadTicket(path string) (*Ticket, error) {
 	return ParseTicket(string(content))
 }
 
+// headerBuf is a reusable buffer for reading ticket headers.
+// Most frontmatter + title fits in 2KB.
+var headerBuf = make([]byte, 2048)
+
+// trie is a generic trie for ASCII string lookup.
+type trie[T any] struct {
+	children [128]*trie[T]
+	value    T
+	hasValue bool
+}
+
+// buildTrie constructs a trie from key-value pairs.
+func buildTrie[T any](entries []struct {
+	key   string
+	value T
+}) *trie[T] {
+	root := &trie[T]{}
+	for _, e := range entries {
+		node := root
+		for i := 0; i < len(e.key); i++ {
+			c := e.key[i]
+			if node.children[c] == nil {
+				node.children[c] = &trie[T]{}
+			}
+			node = node.children[c]
+		}
+		node.value = e.value
+		node.hasValue = true
+	}
+	return root
+}
+
+// fieldSetter assigns a parsed value to a ticket field.
+type fieldSetter func(t *Ticket, val []byte)
+
+// keyTrie is the pre-built trie for YAML key lookup.
+var keyTrie = buildKeyTrie()
+
+// statusTrie is the pre-built trie for status value lookup.
+var statusTrie = buildStatusTrie()
+
+// buildStatusTrie constructs the status lookup trie from ValidStatuses.
+func buildStatusTrie() *trie[Status] {
+	// Status is type string, so we can build trie directly
+	root := &trie[Status]{}
+	for _, s := range ValidStatuses {
+		node := root
+		for i := 0; i < len(s); i++ {
+			c := s[i]
+			if node.children[c] == nil {
+				node.children[c] = &trie[Status]{}
+			}
+			node = node.children[c]
+		}
+		node.value = s
+		node.hasValue = true
+	}
+	return root
+}
+
+// lookupStatus returns a pre-allocated Status constant if found, or converts val.
+func lookupStatus(val []byte) Status {
+	node := statusTrie
+	for _, c := range val {
+		if c >= 128 || node.children[c] == nil {
+			return Status(val)
+		}
+		node = node.children[c]
+	}
+	if node.hasValue {
+		return node.value
+	}
+	return Status(val)
+}
+
+// buildKeyTrie constructs the key lookup trie at init time.
+// Leading whitespace loops at root; keys terminate on ':' or whitespace.
+func buildKeyTrie() *trie[fieldSetter] {
+	root := buildTrie([]struct {
+		key   string
+		value fieldSetter
+	}{
+		{"id", func(t *Ticket, val []byte) { t.ID = string(val) }},
+		{"status", func(t *Ticket, val []byte) { t.Status = lookupStatus(val) }},
+		{"deps", func(t *Ticket, val []byte) { t.Deps = parseArrayBytes(val) }},
+		{"links", func(t *Ticket, val []byte) { t.Links = parseArrayBytes(val) }},
+		{"created", func(t *Ticket, val []byte) { t.Created = parseTime(string(val)) }},
+		{"type", func(t *Ticket, val []byte) { t.Type = string(val) }},
+		{"priority", func(t *Ticket, val []byte) { t.Priority, _ = strconv.Atoi(string(val)) }},
+		{"assignee", func(t *Ticket, val []byte) { t.Assignee = string(val) }},
+		{"external-ref", func(t *Ticket, val []byte) { t.ExternalRef = string(val) }},
+		{"parent", func(t *Ticket, val []byte) { t.Parent = string(val) }},
+		{"tags", func(t *Ticket, val []byte) { t.Tags = parseArrayBytes(val) }},
+	})
+
+	// Leading whitespace stays at root
+	root.children[' '] = root
+	root.children['\t'] = root
+
+	return root
+}
+
+// LoadTicketHeader loads only the frontmatter and title from a ticket file.
+// Uses a single shared buffer and minimal allocations.
+func LoadTicketHeader(path string) (*Ticket, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	n, err := f.Read(headerBuf)
+	if err != nil {
+		return nil, err
+	}
+
+	return parseHeaderBytes(headerBuf[:n])
+}
+
+// parseHeaderBytes parses ticket header from buffer with minimal allocations.
+func parseHeaderBytes(data []byte) (*Ticket, error) {
+	n := len(data)
+	if n < 4 {
+		return nil, fmt.Errorf("file too small")
+	}
+
+	// Check opening "---\n"
+	if data[0] != '-' || data[1] != '-' || data[2] != '-' || data[3] != '\n' {
+		return nil, fmt.Errorf("missing frontmatter")
+	}
+
+	// Find closing "\n---\n" using simple scan
+	fmEnd := -1
+	for i := 4; i < n-4; i++ {
+		if data[i] == '\n' && data[i+1] == '-' && data[i+2] == '-' && data[i+3] == '-' && data[i+4] == '\n' {
+			fmEnd = i
+			break
+		}
+	}
+	if fmEnd == -1 {
+		return nil, fmt.Errorf("unclosed frontmatter")
+	}
+
+	t := &Ticket{
+		Status: StatusOpen,
+	}
+
+	// Parse frontmatter lines in-place
+	lineStart := 4
+	for i := 4; i <= fmEnd; i++ {
+		if i == fmEnd || data[i] == '\n' {
+			if i > lineStart {
+				parseHeaderLine(data[lineStart:i], t)
+			}
+			lineStart = i + 1
+		}
+	}
+
+	// Find title after frontmatter (starts after "\n---\n")
+	bodyStart := fmEnd + 5
+	for i := bodyStart; i < n-2; i++ {
+		if data[i] == '#' && data[i+1] == ' ' {
+			t.Title = extractLine(data, i+2, n)
+			break
+		}
+		if data[i] == '\n' && i+2 < n && data[i+1] == '#' && data[i+2] == ' ' {
+			t.Title = extractLine(data, i+3, n)
+			break
+		}
+	}
+
+	return t, nil
+}
+
+// extractLine extracts a string from start until newline or end.
+func extractLine(data []byte, start, end int) string {
+	lineEnd := start
+	for lineEnd < end && data[lineEnd] != '\n' {
+		lineEnd++
+	}
+	return string(data[start:lineEnd])
+}
+
+// parseHeaderLine parses a single YAML line into ticket fields.
+// The trie handles leading whitespace via self-loops at root.
+// Key matching terminates when we can't advance and hit ':' or whitespace.
+func parseHeaderLine(line []byte, t *Ticket) {
+	n := len(line)
+	node := keyTrie
+	i := 0
+
+	// Walk trie to match key
+	for i < n {
+		c := line[i]
+		if c >= 128 {
+			return
+		}
+		next := node.children[c]
+		if next == nil {
+			// Can't advance - check if we completed a key
+			if node.hasValue && (c == ':' || c == ' ' || c == '\t') {
+				break
+			}
+			return
+		}
+		node = next
+		i++
+	}
+
+	if !node.hasValue || i >= n {
+		return
+	}
+
+	// Skip to colon
+	for i < n && line[i] != ':' {
+		i++
+	}
+	if i >= n {
+		return
+	}
+	i++ // skip colon
+
+	// Trim value: skip leading whitespace
+	for i < n && (line[i] == ' ' || line[i] == '\t') {
+		i++
+	}
+	// Trim trailing whitespace
+	end := n
+	for end > i && (line[end-1] == ' ' || line[end-1] == '\t') {
+		end--
+	}
+
+	node.value(t, line[i:end])
+}
+
+// trimBytes trims leading and trailing whitespace from a byte slice.
+func trimBytes(b []byte) []byte {
+	start, end := 0, len(b)
+	for start < end && (b[start] == ' ' || b[start] == '\t') {
+		start++
+	}
+	for end > start && (b[end-1] == ' ' || b[end-1] == '\t') {
+		end--
+	}
+	return b[start:end]
+}
+
+// parseArrayBytes parses a YAML array like "[a, b, c]" from bytes.
+func parseArrayBytes(val []byte) []string {
+	if len(val) < 2 || val[0] != '[' || val[len(val)-1] != ']' {
+		return []string{}
+	}
+	inner := val[1 : len(val)-1]
+	if len(inner) == 0 {
+		return []string{}
+	}
+
+	// Count commas to pre-allocate
+	count := 1
+	for _, b := range inner {
+		if b == ',' {
+			count++
+		}
+	}
+
+	result := make([]string, 0, count)
+	start := 0
+	for i := 0; i <= len(inner); i++ {
+		if i == len(inner) || inner[i] == ',' {
+			elem := trimBytes(inner[start:i])
+			if len(elem) > 0 {
+				result = append(result, string(elem))
+			}
+			start = i + 1
+		}
+	}
+	return result
+}
+
 // ParseTicket parses a ticket from markdown content with YAML frontmatter.
 func ParseTicket(content string) (*Ticket, error) {
 	t := &Ticket{
-		Deps:   []string{},
-		Links:  []string{},
-		Tags:   []string{},
 		Status: StatusOpen,
 	}
 
@@ -230,33 +505,3 @@ func UpdateYAMLField(path, field, value string) error {
 	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0644)
 }
 
-// GetYAMLField extracts a single field value from YAML frontmatter.
-func GetYAMLField(path, field string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	inFront := false
-	fieldPrefix := field + ":"
-
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		if strings.TrimSpace(line) == "---" {
-			if inFront {
-				break // End of frontmatter
-			}
-			inFront = true
-			continue
-		}
-
-		if inFront && strings.HasPrefix(line, fieldPrefix) {
-			return strings.TrimSpace(strings.TrimPrefix(line, fieldPrefix)), nil
-		}
-	}
-
-	return "", scanner.Err()
-}

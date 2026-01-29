@@ -444,6 +444,8 @@ assignee: Test User
 		t.Fatalf("WriteFile error: %v", err)
 	}
 
+	cache := NewCache()
+
 	tests := []struct {
 		field string
 		want  string
@@ -456,7 +458,7 @@ assignee: Test User
 
 	for _, tt := range tests {
 		t.Run(tt.field, func(t *testing.T) {
-			got, err := GetYAMLField(path, tt.field)
+			got, err := cache.GetYAMLField(path, tt.field)
 			if err != nil {
 				t.Fatalf("GetYAMLField error: %v", err)
 			}

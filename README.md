@@ -2,6 +2,8 @@
 
 A git-backed issue tracker for AI agents. Rooted in the Unix Philosophy, `tk` is inspired by Joe Armstrong's [Minimal Viable Program](https://joearms.github.io/published/2014-06-25-minimal-viable-program.html) with additional quality of life features for managing and querying against complex issue dependency graphs.
 
+This is a Go port of the original [bash implementation](https://github.com/wedow/ticket).
+
 Tickets are markdown files with YAML frontmatter in `.tickets/`. This allows AI agents to easily search them for relevant content without dumping ten thousand character JSONL lines into their context window.
 
 Using ticket IDs as file names also allows IDEs to quickly navigate to the ticket for you. For example, you might run `git log` in your terminal and see something like:
@@ -21,7 +23,7 @@ go install github.com/kardianos/ticket/cmd/tk@latest
 
 ## Requirements
 
-Go 1.21 or later.
+Go 1.24 or later.
 
 ## Agent Setup
 
@@ -90,21 +92,6 @@ The repository also contains:
 
 - **`ticket`** - Original bash implementation (~900 lines)
 - **`features/`** - Python BDD tests using [behave](https://behave.readthedocs.io/) (112 scenarios)
-
-To run the Python BDD tests against the Go binary (requires Python and uv):
-
-```bash
-go build -o tk ./cmd/tk && uv run --with behave behave
-```
-
-### Benchmarks
-
-BDD test suite (112 scenarios, 769 steps) run 10 times:
-
-| Implementation | Avg per run | Total (10 runs) | Speedup |
-|----------------|-------------|-----------------|---------|
-| Go (cmd/tk)    | 0.36s       | 6.0s            | 2.6x    |
-| Bash (ticket)  | 1.29s       | 15.5s           | 1x      |
 
 ## License
 

@@ -154,14 +154,10 @@ func (s *Store) BlockedTickets(opts ListOptions) ([]*Ticket, [][]string, error) 
 }
 
 // ClosedTickets returns recently closed tickets.
+// Uses iterator to load only as many tickets as needed to reach the limit.
 func (s *Store) ClosedTickets(opts ListOptions, limit int) ([]*Ticket, error) {
-	tickets, err := s.ListTicketsByMtime(100) // Get more to filter
-	if err != nil {
-		return nil, err
-	}
-
 	var result []*Ticket
-	for _, t := range tickets {
+	for t := range s.TicketsByMtime() {
 		if t.Status != StatusClosed && t.Status != "done" {
 			continue
 		}
@@ -189,20 +185,11 @@ type ShowTicketInfo struct {
 }
 
 // GetShowInfo returns enhanced ticket information for the show command.
+// Loads only necessary tickets when possible; falls back to full scan for blocking/children.
 func (s *Store) GetShowInfo(id string) (*ShowTicketInfo, error) {
-	tickets, err := s.ListTickets()
+	// Load target ticket directly
+	target, err := s.Load(id)
 	if err != nil {
-		return nil, err
-	}
-
-	// Build maps
-	ticketMap := make(map[string]*Ticket)
-	for _, t := range tickets {
-		ticketMap[t.ID] = t
-	}
-
-	target, ok := ticketMap[id]
-	if !ok {
 		return nil, fmt.Errorf("ticket '%s' not found", id)
 	}
 
@@ -214,42 +201,46 @@ func (s *Store) GetShowInfo(id string) (*ShowTicketInfo, error) {
 		return nil, err
 	}
 
-	// Get parent info
+	// Get parent info by direct load
 	if target.Parent != "" {
-		info.ParentInfo = ticketMap[target.Parent]
+		info.ParentInfo, _ = s.Load(target.Parent)
 	}
 
-	// Get unclosed blockers
+	// Get unclosed blockers by direct load
 	for _, dep := range target.Deps {
-		if t := ticketMap[dep]; t != nil && t.Status != StatusClosed {
+		if t, err := s.Load(dep); err == nil && t.Status != StatusClosed {
 			info.Blockers = append(info.Blockers, t)
 		}
 	}
 
-	// Get tickets this is blocking
-	for _, t := range tickets {
-		if t.Status == StatusClosed {
-			continue
+	// Get linked by direct load
+	for _, linkID := range target.Links {
+		if t, err := s.Load(linkID); err == nil {
+			info.Linked = append(info.Linked, t)
 		}
-		for _, dep := range t.Deps {
-			if dep == id {
-				info.Blocking = append(info.Blocking, t)
-				break
+	}
+
+	// For blocking and children, we need to scan all tickets
+	// This is cached, so subsequent calls are fast
+	tickets, err := s.ListTickets()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, t := range tickets {
+		// Get tickets this is blocking (open tickets that depend on this one)
+		if t.Status != StatusClosed {
+			for _, dep := range t.Deps {
+				if dep == id {
+					info.Blocking = append(info.Blocking, t)
+					break
+				}
 			}
 		}
-	}
 
-	// Get children
-	for _, t := range tickets {
+		// Get children
 		if t.Parent == id {
 			info.Children = append(info.Children, t)
-		}
-	}
-
-	// Get linked
-	for _, linkID := range target.Links {
-		if t := ticketMap[linkID]; t != nil {
-			info.Linked = append(info.Linked, t)
 		}
 	}
 
