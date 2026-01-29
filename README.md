@@ -1,43 +1,27 @@
 # ticket
 
-The git-backed issue tracker for AI agents. Rooted in the Unix Philosophy, `tk` is inspired by Joe Armstrong's [Minimal Viable Program](https://joearms.github.io/published/2014-06-25-minimal-viable-program.html) with additional quality of life features for managing and querying against complex issue dependency graphs.
-
-`tk` was written as a full replacement for [beads](https://github.com/steveyegge/beads). It shares many similar commands but without the need for keeping a SQLite file in sync or a rogue background daemon mangling your changes. It ships with a `migrate-beads` command to make this a smooth transition.
+A git-backed issue tracker for AI agents. Rooted in the Unix Philosophy, `tk` is inspired by Joe Armstrong's [Minimal Viable Program](https://joearms.github.io/published/2014-06-25-minimal-viable-program.html) with additional quality of life features for managing and querying against complex issue dependency graphs.
 
 Tickets are markdown files with YAML frontmatter in `.tickets/`. This allows AI agents to easily search them for relevant content without dumping ten thousand character JSONL lines into their context window.
 
 Using ticket IDs as file names also allows IDEs to quickly navigate to the ticket for you. For example, you might run `git log` in your terminal and see something like:
 
 ```
-nw-5c46: add SSE connection management 
+nw-5c46: add SSE connection management
 ```
 
 VS Code allows you to Ctrl+Click or Cmd+Click the ID and jump directly to the file to read the details.
 
 ## Install
 
-**Homebrew (macOS/Linux):**
+**From source:**
 ```bash
-brew tap wedow/tools
-brew install ticket
+go install github.com/kardianos/ticket/cmd/tk@latest
 ```
-
-**Arch Linux (AUR):**
-```bash
-yay -S ticket  # or paru, etc.
-```
-
-**From source (auto-updates on git pull):**
-```bash
-git clone https://github.com/wedow/ticket.git
-cd ticket && ln -s "$PWD/ticket" ~/.local/bin/tk
-```
-
-**Or** just copy `ticket` to somewhere in your PATH.
 
 ## Requirements
 
-`tk` is a portable bash script requiring only coreutils, so it works out of the box on any POSIX system with bash installed. The `query` command requires `jq`. Uses `rg` (ripgrep) if available, falls back to `grep`.
+Go 1.21 or later.
 
 ## Agent Setup
 
@@ -84,8 +68,7 @@ Commands:
   show <id>                Display ticket
   edit <id>                Open ticket in $EDITOR
   add-note <id> [text]     Append timestamped note (or pipe via stdin)
-  query [jq-filter]        Output tickets as JSON, optionally filtered
-  migrate-beads            Import tickets from .beads/issues.jsonl
+  query [filter]           Output tickets as JSON (filter: status=open, priority<2, or jq expr)
 
 Searches parent directories for .tickets/ (override with TICKETS_DIR env var)
 Supports partial ID matching (e.g., 'tk show 5c4' matches 'nw-5c46')
@@ -93,37 +76,35 @@ Supports partial ID matching (e.g., 'tk show 5c4' matches 'nw-5c46')
 
 ## Testing
 
-The tests are written in the Behavior-Driven Development library [behave](https://behave.readthedocs.io/en/latest/) and require Python.
-
-If you have `uv` [installed](https://docs.astral.sh/uv/getting-started/installation/) simply:
-
-```sh
-make test
-```
-
-## Migrating from Beads
+The primary implementation and test suite are in Go:
 
 ```bash
-tk migrate-beads
-
-# review new files if you like
-git status
-
-# check state matches expectations
-tk ready
-tk blocked
-
-# compare against
-bd ready
-bd blocked
-
-# all good, let's go
-git rm -rf .beads
-git add .tickets
-git commit -am "ditch beads"
+go test ./...
 ```
 
-For a thorough system-wide Beads cleanup, see [banteg's uninstall script](https://gist.github.com/banteg/1a539b88b3c8945cd71e4b958f319d8d).
+This runs 114 test cases in `cmd/tk/main_test.go` covering all commands.
+
+### Legacy Tests
+
+The repository also contains:
+
+- **`ticket`** - Original bash implementation (~900 lines)
+- **`features/`** - Python BDD tests using [behave](https://behave.readthedocs.io/) (112 scenarios)
+
+To run the Python BDD tests against the Go binary (requires Python and uv):
+
+```bash
+go build -o tk ./cmd/tk && uv run --with behave behave
+```
+
+### Benchmarks
+
+BDD test suite (112 scenarios, 769 steps) run 10 times:
+
+| Implementation | Avg per run | Total (10 runs) | Speedup |
+|----------------|-------------|-----------------|---------|
+| Go (cmd/tk)    | 0.36s       | 6.0s            | 2.6x    |
+| Bash (ticket)  | 1.29s       | 15.5s           | 1x      |
 
 ## License
 

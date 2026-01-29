@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- Rewrote implementation in Go (`cmd/tk`) for improved performance and maintainability
+- Migrated Python BDD tests to Go table-driven tests in `cmd/tk/main_test.go` (114 test cases)
+- Editor fallback now searches for micro, nano, vi in order when `$EDITOR` is not set
+
+### Added
+- Go test coverage for all commands including dependency cycles, partial ID resolution, and directory walking
+
 ## [0.3.1] - 2026-01-28
 
 ### Added
