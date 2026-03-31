@@ -441,6 +441,13 @@ func parseListOpts(args []string) ticket.ListOptions {
 			}
 		case strings.HasPrefix(arg, "--tag="):
 			opts.Tag = strings.TrimPrefix(arg, "--tag=")
+		case arg == "-t":
+			if i+1 < len(args) {
+				opts.Type = args[i+1]
+				i++
+			}
+		case strings.HasPrefix(arg, "--type="):
+			opts.Type = strings.TrimPrefix(arg, "--type=")
 		}
 	}
 

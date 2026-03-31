@@ -11,6 +11,7 @@ type ListOptions struct {
 	Status   string
 	Assignee string
 	Tag      string
+	Type     string
 }
 
 // Matches returns true if the ticket matches the assignee and tag filters.
@@ -20,6 +21,9 @@ func (opts ListOptions) Matches(t *Ticket) bool {
 		return false
 	}
 	if opts.Tag != "" && !hasTag(t.Tags, opts.Tag) {
+		return false
+	}
+	if opts.Type != "" && t.Type != opts.Type {
 		return false
 	}
 	return true
@@ -623,4 +627,3 @@ func (s *Store) LinkTickets(ids []string) (int, error) {
 
 	return count, nil
 }
-
