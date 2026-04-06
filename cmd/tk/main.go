@@ -174,6 +174,15 @@ func cmdCreate(store *ticket.Store, args []string) error {
 		return err
 	}
 
+	if opts.Title == "" {
+		path, err := store.GetTicketPath(t.ID)
+		if err != nil {
+			return fmt.Errorf("Error: %v", err)
+		}
+
+		openEditor(path)
+	}
+
 	fmt.Fprintln(stdout, t.ID)
 	return nil
 }
@@ -600,6 +609,11 @@ func cmdEdit(store *ticket.Store, args []string) error {
 	if err != nil {
 		return fmt.Errorf("Error: %v", err)
 	}
+
+	return openEditor(path)
+}
+
+func openEditor(path string) error {
 
 	// Check if running in TTY
 	if isTerminal(os.Stdin) && isTerminal(os.Stdout) {
