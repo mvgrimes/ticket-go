@@ -208,4 +208,3 @@ func BenchmarkLoadTicketHeader(b *testing.B) {
 		}
 	}
 }
-

@@ -504,4 +504,3 @@ func UpdateYAMLField(path, field, value string) error {
 
 	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0644)
 }
-
