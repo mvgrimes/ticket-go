@@ -434,6 +434,11 @@ func parseListOpts(args []string) ticket.ListOptions {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
+		case arg == "--status":
+			if i+1 < len(args) {
+				opts.Status = args[i+1]
+				i++
+			}
 		case strings.HasPrefix(arg, "--status="):
 			opts.Status = strings.TrimPrefix(arg, "--status=")
 		case arg == "-a":

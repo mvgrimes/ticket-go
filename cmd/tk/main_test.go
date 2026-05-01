@@ -1121,6 +1121,16 @@ func TestList(t *testing.T) {
 		e.assertOutputNotContains("list-0002")
 	})
 
+	t.Run("list with status filter space-separated", func(t *testing.T) {
+		e := newTestEnv(t)
+		e.createTicket("list-0001", "Open ticket")
+		e.createTicket("list-0002", "Closed ticket")
+		e.setStatus("list-0002", "closed")
+		e.run("ls", "--status", "open").assertSuccess()
+		e.assertOutputContains("list-0001")
+		e.assertOutputNotContains("list-0002")
+	})
+
 	t.Run("list shows dependencies", func(t *testing.T) {
 		e := newTestEnv(t)
 		e.createTicket("list-0001", "Main ticket")
