@@ -6,10 +6,11 @@
 - Rewrote implementation in Go (`cmd/tk`) for improved performance and maintainability
 - Migrated Python BDD tests to Go table-driven tests in `cmd/tk/main_test.go` (114 test cases)
 - Editor fallback now searches for micro, nano, vi in order when `$EDITOR` is not set
+- `--json` output for `list`, `ready`, and `closed` now returns a JSON array; `show --json` remains a single object
 
 ### Added
 - Go test coverage for all commands including dependency cycles, partial ID resolution, and directory walking
-- `--json` flag for `list`, `ready`, `closed`, and `show` commands; outputs one JSON object per ticket with fields: `id`, `title`, `status`, `priority`, `issue_type`, `owner`, `created_at`, `created_by`, `updated_at`, `dependency_count`, `dependent_count`, `comment_count`
+- `--json` flag for `list`, `ready`, `closed`, and `show` commands with fields: `id`, `title`, `status`, `priority`, `issue_type`, `owner`, `created_at`, `created_by`, `updated_at`, `dependency_count`, `dependent_count`, `comment_count`
 
 ## [0.3.1] - 2026-01-28
 

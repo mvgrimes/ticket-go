@@ -1836,6 +1836,15 @@ func TestJSONFlag(t *testing.T) {
 		return obj
 	}
 
+	parseJSONArray := func(t *testing.T, output string) []map[string]interface{} {
+		t.Helper()
+		var arr []map[string]interface{}
+		if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &arr); err != nil {
+			t.Fatalf("invalid JSON array %q: %v", output, err)
+		}
+		return arr
+	}
+
 	assertJSONFields := func(t *testing.T, obj map[string]interface{}, id, title, status string) {
 		t.Helper()
 		fields := []string{"id", "title", "status", "priority", "issue_type", "owner",
@@ -1860,11 +1869,11 @@ func TestJSONFlag(t *testing.T) {
 		e := newTestEnv(t)
 		e.createTicket("tk-0001", "My Ticket")
 		e.run("list", "--json").assertSuccess()
-		lines := strings.Split(strings.TrimSpace(e.stdout()), "\n")
-		if len(lines) != 1 {
-			t.Fatalf("expected 1 line, got %d", len(lines))
+		objs := parseJSONArray(t, e.stdout())
+		if len(objs) != 1 {
+			t.Fatalf("expected 1 ticket, got %d", len(objs))
 		}
-		obj := parseJSON(t, lines[0])
+		obj := objs[0]
 		assertJSONFields(t, obj, "tk-0001", "My Ticket", "open")
 	})
 
@@ -1874,12 +1883,11 @@ func TestJSONFlag(t *testing.T) {
 		e.createTicket("tk-0002", "Ticket 2")
 		e.addDep("tk-0001", "tk-0002")
 		e.run("list", "--json").assertSuccess()
-		lines := strings.Split(strings.TrimSpace(e.stdout()), "\n")
-		if len(lines) != 2 {
-			t.Fatalf("expected 2 lines, got %d", len(lines))
+		objs := parseJSONArray(t, e.stdout())
+		if len(objs) != 2 {
+			t.Fatalf("expected 2 tickets, got %d", len(objs))
 		}
-		for _, line := range lines {
-			obj := parseJSON(t, line)
+		for _, obj := range objs {
 			if obj["id"] == "tk-0001" {
 				if obj["dependency_count"].(float64) != 1 {
 					t.Errorf("tk-0001 dependency_count: got %v, want 1", obj["dependency_count"])
@@ -1906,7 +1914,11 @@ func TestJSONFlag(t *testing.T) {
 		e.run("add-note", id, "first note").assertSuccess()
 		e.run("add-note", id, "second note").assertSuccess()
 		e.run("list", "--json").assertSuccess()
-		obj := parseJSON(t, strings.TrimSpace(e.stdout()))
+		objs := parseJSONArray(t, e.stdout())
+		if len(objs) != 1 {
+			t.Fatalf("expected 1 ticket, got %d", len(objs))
+		}
+		obj := objs[0]
 		if obj["comment_count"].(float64) != 2 {
 			t.Errorf("comment_count: got %v, want 2", obj["comment_count"])
 		}
@@ -1916,11 +1928,11 @@ func TestJSONFlag(t *testing.T) {
 		e := newTestEnv(t)
 		e.createTicket("tk-0001", "Ready Ticket")
 		e.run("ready", "--json").assertSuccess()
-		lines := strings.Split(strings.TrimSpace(e.stdout()), "\n")
-		if len(lines) != 1 {
-			t.Fatalf("expected 1 line, got %d", len(lines))
+		objs := parseJSONArray(t, e.stdout())
+		if len(objs) != 1 {
+			t.Fatalf("expected 1 ticket, got %d", len(objs))
 		}
-		obj := parseJSON(t, lines[0])
+		obj := objs[0]
 		assertJSONFields(t, obj, "tk-0001", "Ready Ticket", "open")
 	})
 
@@ -1929,11 +1941,11 @@ func TestJSONFlag(t *testing.T) {
 		e.createTicket("tk-0001", "Closed Ticket")
 		e.setStatus("tk-0001", "closed")
 		e.run("closed", "--json").assertSuccess()
-		lines := strings.Split(strings.TrimSpace(e.stdout()), "\n")
-		if len(lines) != 1 {
-			t.Fatalf("expected 1 line, got %d", len(lines))
+		objs := parseJSONArray(t, e.stdout())
+		if len(objs) != 1 {
+			t.Fatalf("expected 1 ticket, got %d", len(objs))
 		}
-		obj := parseJSON(t, lines[0])
+		obj := objs[0]
 		assertJSONFields(t, obj, "tk-0001", "Closed Ticket", "closed")
 	})
 

@@ -12,7 +12,7 @@ import (
 	"golang.org/x/term"
 )
 
-var version = "0.4.4"
+var version = "0.4.5"
 
 // Global writers for output - can be overridden in tests
 var (
@@ -477,6 +477,7 @@ func printTicketsJSON(store *ticket.Store, tickets []*ticket.Ticket) error {
 		return err
 	}
 
+	summaries := make([]ticket.TicketSummaryJSON, 0, len(tickets))
 	for _, t := range tickets {
 		full, err := store.Load(t.ID)
 		if err != nil {
@@ -484,12 +485,14 @@ func printTicketsJSON(store *ticket.Store, tickets []*ticket.Ticket) error {
 		}
 		mtime := store.GetMtime(t.ID)
 		summary := ticket.NewTicketSummaryJSON(full, dependentMap[t.ID], ticket.CountComments(full.Body), mtime)
-		data, err := json.Marshal(summary)
-		if err != nil {
-			continue
-		}
-		fmt.Fprintln(stdout, string(data))
+		summaries = append(summaries, summary)
 	}
+
+	data, err := json.Marshal(summaries)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(stdout, string(data))
 
 	return nil
 }

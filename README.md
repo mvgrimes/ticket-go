@@ -78,7 +78,10 @@ Supports partial ID matching (e.g., 'tk show 5c4' matches 'nw-5c46')
 
 ## JSON Output
 
-The `list`, `ready`, `closed`, and `show` commands accept a `--json` flag that outputs each ticket as a JSON object (one per line):
+The `list`, `ready`, `closed`, and `show` commands accept a `--json` flag.
+
+- `list`, `ready`, and `closed` output a JSON array of ticket objects.
+- `show` outputs a single ticket object.
 
 ```bash
 tk list --json
@@ -87,23 +90,25 @@ tk closed --json
 tk show <id> --json
 ```
 
-Example output:
+Example `list --json` output:
 
 ```json
-{
-  "id": "mytui-hdj",
-  "title": "add login page",
-  "status": "open",
-  "priority": 2,
-  "issue_type": "task",
-  "owner": "Mark Grimes",
-  "created_at": "2026-05-02T13:00:18Z",
-  "created_by": "Mark Grimes",
-  "updated_at": "2026-05-02T13:00:18Z",
-  "dependency_count": 0,
-  "dependent_count": 0,
-  "comment_count": 0
-}
+[
+  {
+    "id": "mytui-hdj",
+    "title": "add login page",
+    "status": "open",
+    "priority": 2,
+    "issue_type": "task",
+    "owner": "Mark Grimes",
+    "created_at": "2026-05-02T13:00:18Z",
+    "created_by": "Mark Grimes",
+    "updated_at": "2026-05-02T13:00:18Z",
+    "dependency_count": 0,
+    "dependent_count": 0,
+    "comment_count": 0
+  }
+]
 ```
 
 Fields:
