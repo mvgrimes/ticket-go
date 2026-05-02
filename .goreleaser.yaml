@@ -23,6 +23,7 @@ builds:
       # - windows
       - darwin
     main: ./cmd/tk/main.go
+    binary: tk
 
 archives:
   - formats: [tar.gz]
