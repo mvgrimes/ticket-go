@@ -56,6 +56,8 @@ release:
 
 homebrew_casks:
   - name: ticket-go
+    binaries:
+      - tk
     repository:
       owner: mvgrimes
       name: homebrew-tap

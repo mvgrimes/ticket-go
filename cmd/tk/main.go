@@ -12,7 +12,7 @@ import (
 	"golang.org/x/term"
 )
 
-var version = "0.4.3"
+var version = "0.4.4"
 
 // Global writers for output - can be overridden in tests
 var (
