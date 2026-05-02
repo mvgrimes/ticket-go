@@ -63,17 +63,72 @@ Commands:
   undep <id> <dep-id>      Remove dependency
   link <id> <id> [id...]   Link tickets together (symmetric)
   unlink <id> <target-id>  Remove link between tickets
-  ls|list [--status=X] [-a X] [-T X]   List tickets
-  ready [-a X] [-T X]      List open/in-progress tickets with deps resolved
+  ls|list [--status=X] [-a X] [-T X] [--json]   List tickets
+  ready [-a X] [-T X] [--json]      List open/in-progress tickets with deps resolved
   blocked [-a X] [-T X]    List open/in-progress tickets with unresolved deps
-  closed [--limit=N] [-a X] [-T X] List recently closed tickets (default 20, by mtime)
-  show <id>                Display ticket
+  closed [--limit=N] [-a X] [-T X] [--json] List recently closed tickets (default 20, by mtime)
+  show <id> [--json]       Display ticket
   edit <id>                Open ticket in $EDITOR
   add-note <id> [text]     Append timestamped note (or pipe via stdin)
   query [filter]           Output tickets as JSON (filter: status=open, priority<2, or jq expr)
 
 Searches parent directories for .tickets/ (override with TICKETS_DIR env var)
 Supports partial ID matching (e.g., 'tk show 5c4' matches 'nw-5c46')
+```
+
+## JSON Output
+
+The `list`, `ready`, `closed`, and `show` commands accept a `--json` flag that outputs each ticket as a JSON object (one per line):
+
+```bash
+tk list --json
+tk ready --json
+tk closed --json
+tk show <id> --json
+```
+
+Example output:
+
+```json
+{
+  "id": "mytui-hdj",
+  "title": "add login page",
+  "status": "open",
+  "priority": 2,
+  "issue_type": "task",
+  "owner": "Mark Grimes",
+  "created_at": "2026-05-02T13:00:18Z",
+  "created_by": "Mark Grimes",
+  "updated_at": "2026-05-02T13:00:18Z",
+  "dependency_count": 0,
+  "dependent_count": 0,
+  "comment_count": 0
+}
+```
+
+Fields:
+
+| Field | Description |
+|-------|-------------|
+| `id` | Ticket ID |
+| `title` | Ticket title |
+| `status` | `open`, `in_progress`, or `closed` |
+| `priority` | 0–4, where 0 is highest |
+| `issue_type` | `bug`, `feature`, `task`, `epic`, or `chore` |
+| `owner` | Assignee |
+| `created_at` | Creation timestamp (ISO 8601) |
+| `created_by` | Creator (same as assignee at creation time) |
+| `updated_at` | Last file modification time (ISO 8601) |
+| `dependency_count` | Number of tickets this ticket depends on |
+| `dependent_count` | Number of tickets that depend on this ticket |
+| `comment_count` | Number of notes added via `add-note` |
+
+The `--json` flag composes with all existing filter flags:
+
+```bash
+tk list --status=open --json
+tk ready -a "Jane" --json
+tk closed --limit=5 --json
 ```
 
 ## Testing

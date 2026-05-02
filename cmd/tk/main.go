@@ -428,8 +428,9 @@ func cmdUnlink(store *ticket.Store, args []string) error {
 	return nil
 }
 
-func parseListOpts(args []string) ticket.ListOptions {
+func parseListOpts(args []string) (ticket.ListOptions, bool) {
 	opts := ticket.ListOptions{}
+	jsonOut := false
 
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -439,6 +440,8 @@ func parseListOpts(args []string) ticket.ListOptions {
 				opts.Status = args[i+1]
 				i++
 			}
+		case arg == "--json":
+			jsonOut = true
 		case strings.HasPrefix(arg, "--status="):
 			opts.Status = strings.TrimPrefix(arg, "--status=")
 		case arg == "-a":
@@ -465,15 +468,42 @@ func parseListOpts(args []string) ticket.ListOptions {
 		}
 	}
 
-	return opts
+	return opts, jsonOut
+}
+
+func printTicketsJSON(store *ticket.Store, tickets []*ticket.Ticket) error {
+	dependentMap, err := store.BuildDependentMap()
+	if err != nil {
+		return err
+	}
+
+	for _, t := range tickets {
+		full, err := store.Load(t.ID)
+		if err != nil {
+			full = t
+		}
+		mtime := store.GetMtime(t.ID)
+		summary := ticket.NewTicketSummaryJSON(full, dependentMap[t.ID], ticket.CountComments(full.Body), mtime)
+		data, err := json.Marshal(summary)
+		if err != nil {
+			continue
+		}
+		fmt.Fprintln(stdout, string(data))
+	}
+
+	return nil
 }
 
 func cmdList(store *ticket.Store, args []string) error {
-	opts := parseListOpts(args)
+	opts, jsonOut := parseListOpts(args)
 
 	tickets, err := store.ListTicketsFiltered(opts)
 	if err != nil {
 		return err
+	}
+
+	if jsonOut {
+		return printTicketsJSON(store, tickets)
 	}
 
 	for _, t := range tickets {
@@ -494,11 +524,15 @@ func cmdList(store *ticket.Store, args []string) error {
 }
 
 func cmdReady(store *ticket.Store, args []string) error {
-	opts := parseListOpts(args)
+	opts, jsonOut := parseListOpts(args)
 
 	tickets, err := store.ReadyTickets(opts)
 	if err != nil {
 		return err
+	}
+
+	if jsonOut {
+		return printTicketsJSON(store, tickets)
 	}
 
 	for _, t := range tickets {
@@ -509,7 +543,7 @@ func cmdReady(store *ticket.Store, args []string) error {
 }
 
 func cmdBlocked(store *ticket.Store, args []string) error {
-	opts := parseListOpts(args)
+	opts, _ := parseListOpts(args)
 
 	tickets, blockers, err := store.BlockedTickets(opts)
 	if err != nil {
@@ -525,7 +559,7 @@ func cmdBlocked(store *ticket.Store, args []string) error {
 }
 
 func cmdClosed(store *ticket.Store, args []string) error {
-	opts := parseListOpts(args)
+	opts, jsonOut := parseListOpts(args)
 	limit := 20
 
 	// Parse limit
@@ -540,6 +574,10 @@ func cmdClosed(store *ticket.Store, args []string) error {
 		return err
 	}
 
+	if jsonOut {
+		return printTicketsJSON(store, tickets)
+	}
+
 	for _, t := range tickets {
 		fmt.Fprintf(stdout, "%-8s [%s] - %s\n", t.ID, t.Status, t.Title)
 	}
@@ -548,13 +586,42 @@ func cmdClosed(store *ticket.Store, args []string) error {
 }
 
 func cmdShow(store *ticket.Store, args []string) error {
-	if len(args) < 1 {
+	jsonOut := false
+	var idArg string
+	for _, arg := range args {
+		if arg == "--json" {
+			jsonOut = true
+		} else if idArg == "" {
+			idArg = arg
+		}
+	}
+
+	if idArg == "" {
 		return fmt.Errorf("usage: tk show <id>")
 	}
 
-	id, err := store.ResolveID(args[0])
+	id, err := store.ResolveID(idArg)
 	if err != nil {
 		return fmt.Errorf("Error: %v", err)
+	}
+
+	if jsonOut {
+		t, err := store.Load(id)
+		if err != nil {
+			return fmt.Errorf("Error: %v", err)
+		}
+		dependentMap, err := store.BuildDependentMap()
+		if err != nil {
+			return err
+		}
+		mtime := store.GetMtime(id)
+		summary := ticket.NewTicketSummaryJSON(t, dependentMap[id], ticket.CountComments(t.Body), mtime)
+		data, err := json.Marshal(summary)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(stdout, string(data))
+		return nil
 	}
 
 	info, err := store.GetShowInfo(id)
@@ -727,11 +794,11 @@ Commands:
   undep <id> <dep-id>      Remove dependency
   link <id> <id> [id...]   Link tickets together (symmetric)
   unlink <id> <target-id>  Remove link between tickets
-  ls|list [--status=X] [-a X] [-T X]   List tickets
-  ready [-a X] [-T X]      List open/in-progress tickets with deps resolved
+  ls|list [--status=X] [-a X] [-T X] [--json]   List tickets
+  ready [-a X] [-T X] [--json]      List open/in-progress tickets with deps resolved
   blocked [-a X] [-T X]    List open/in-progress tickets with unresolved deps
-  closed [--limit=N] [-a X] [-T X] List recently closed tickets (default 20, by mtime)
-  show <id>                Display ticket
+  closed [--limit=N] [-a X] [-T X] [--json] List recently closed tickets (default 20, by mtime)
+  show <id> [--json]       Display ticket
   edit <id>                Open ticket in $EDITOR
   add-note <id> [text]     Append timestamped note (or pipe via stdin)
   query [filter]           Output tickets as JSON (filter: status=open, priority<2, or jq expr)

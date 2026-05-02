@@ -1825,3 +1825,134 @@ func TestDepCycle(t *testing.T) {
 		e.assertOutputContains("task-0002")
 	})
 }
+
+func TestJSONFlag(t *testing.T) {
+	parseJSON := func(t *testing.T, line string) map[string]interface{} {
+		t.Helper()
+		var obj map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &obj); err != nil {
+			t.Fatalf("invalid JSON %q: %v", line, err)
+		}
+		return obj
+	}
+
+	assertJSONFields := func(t *testing.T, obj map[string]interface{}, id, title, status string) {
+		t.Helper()
+		fields := []string{"id", "title", "status", "priority", "issue_type", "owner",
+			"created_at", "created_by", "updated_at", "dependency_count", "dependent_count", "comment_count"}
+		for _, f := range fields {
+			if _, ok := obj[f]; !ok {
+				t.Errorf("missing field %q in JSON output", f)
+			}
+		}
+		if obj["id"] != id {
+			t.Errorf("id: got %v, want %s", obj["id"], id)
+		}
+		if obj["title"] != title {
+			t.Errorf("title: got %v, want %s", obj["title"], title)
+		}
+		if obj["status"] != status {
+			t.Errorf("status: got %v, want %s", obj["status"], status)
+		}
+	}
+
+	t.Run("list --json outputs all required fields", func(t *testing.T) {
+		e := newTestEnv(t)
+		e.createTicket("tk-0001", "My Ticket")
+		e.run("list", "--json").assertSuccess()
+		lines := strings.Split(strings.TrimSpace(e.stdout()), "\n")
+		if len(lines) != 1 {
+			t.Fatalf("expected 1 line, got %d", len(lines))
+		}
+		obj := parseJSON(t, lines[0])
+		assertJSONFields(t, obj, "tk-0001", "My Ticket", "open")
+	})
+
+	t.Run("list --json dependency_count", func(t *testing.T) {
+		e := newTestEnv(t)
+		e.createTicket("tk-0001", "Ticket 1")
+		e.createTicket("tk-0002", "Ticket 2")
+		e.addDep("tk-0001", "tk-0002")
+		e.run("list", "--json").assertSuccess()
+		lines := strings.Split(strings.TrimSpace(e.stdout()), "\n")
+		if len(lines) != 2 {
+			t.Fatalf("expected 2 lines, got %d", len(lines))
+		}
+		for _, line := range lines {
+			obj := parseJSON(t, line)
+			if obj["id"] == "tk-0001" {
+				if obj["dependency_count"].(float64) != 1 {
+					t.Errorf("tk-0001 dependency_count: got %v, want 1", obj["dependency_count"])
+				}
+				if obj["dependent_count"].(float64) != 0 {
+					t.Errorf("tk-0001 dependent_count: got %v, want 0", obj["dependent_count"])
+				}
+			}
+			if obj["id"] == "tk-0002" {
+				if obj["dependency_count"].(float64) != 0 {
+					t.Errorf("tk-0002 dependency_count: got %v, want 0", obj["dependency_count"])
+				}
+				if obj["dependent_count"].(float64) != 1 {
+					t.Errorf("tk-0002 dependent_count: got %v, want 1", obj["dependent_count"])
+				}
+			}
+		}
+	})
+
+	t.Run("list --json comment_count", func(t *testing.T) {
+		e := newTestEnv(t)
+		e.run("create", "Noted Ticket").assertSuccess()
+		id := e.lastID
+		e.run("add-note", id, "first note").assertSuccess()
+		e.run("add-note", id, "second note").assertSuccess()
+		e.run("list", "--json").assertSuccess()
+		obj := parseJSON(t, strings.TrimSpace(e.stdout()))
+		if obj["comment_count"].(float64) != 2 {
+			t.Errorf("comment_count: got %v, want 2", obj["comment_count"])
+		}
+	})
+
+	t.Run("ready --json", func(t *testing.T) {
+		e := newTestEnv(t)
+		e.createTicket("tk-0001", "Ready Ticket")
+		e.run("ready", "--json").assertSuccess()
+		lines := strings.Split(strings.TrimSpace(e.stdout()), "\n")
+		if len(lines) != 1 {
+			t.Fatalf("expected 1 line, got %d", len(lines))
+		}
+		obj := parseJSON(t, lines[0])
+		assertJSONFields(t, obj, "tk-0001", "Ready Ticket", "open")
+	})
+
+	t.Run("closed --json", func(t *testing.T) {
+		e := newTestEnv(t)
+		e.createTicket("tk-0001", "Closed Ticket")
+		e.setStatus("tk-0001", "closed")
+		e.run("closed", "--json").assertSuccess()
+		lines := strings.Split(strings.TrimSpace(e.stdout()), "\n")
+		if len(lines) != 1 {
+			t.Fatalf("expected 1 line, got %d", len(lines))
+		}
+		obj := parseJSON(t, lines[0])
+		assertJSONFields(t, obj, "tk-0001", "Closed Ticket", "closed")
+	})
+
+	t.Run("show --json", func(t *testing.T) {
+		e := newTestEnv(t)
+		e.createTicket("tk-0001", "Show Ticket")
+		e.run("show", "tk-0001", "--json").assertSuccess()
+		obj := parseJSON(t, strings.TrimSpace(e.stdout()))
+		assertJSONFields(t, obj, "tk-0001", "Show Ticket", "open")
+	})
+
+	t.Run("show --json issue_type", func(t *testing.T) {
+		e := newTestEnv(t)
+		e.run("create", "--type", "bug", "Bug Ticket").assertSuccess()
+		id := e.lastID
+		e.run("show", id, "--json").assertSuccess()
+		obj := parseJSON(t, strings.TrimSpace(e.stdout()))
+		if obj["issue_type"] != "bug" {
+			t.Errorf("issue_type: got %v, want bug", obj["issue_type"])
+		}
+	})
+}

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Store handles ticket storage operations.
@@ -447,6 +448,30 @@ func formatArray(arr []string) string {
 		return "[]"
 	}
 	return "[" + strings.Join(arr, ", ") + "]"
+}
+
+// BuildDependentMap returns a map of ticket ID to count of tickets that depend on it.
+func (s *Store) BuildDependentMap() (map[string]int, error) {
+	tickets, err := s.ListTickets()
+	if err != nil {
+		return nil, err
+	}
+	counts := make(map[string]int)
+	for _, t := range tickets {
+		for _, dep := range t.Deps {
+			counts[dep]++
+		}
+	}
+	return counts, nil
+}
+
+// GetMtime returns the modification time of a ticket file.
+func (s *Store) GetMtime(id string) time.Time {
+	info, err := os.Stat(s.TicketPath(id))
+	if err != nil {
+		return time.Time{}
+	}
+	return info.ModTime().UTC()
 }
 
 // GetFileContent returns the raw file content of a ticket.

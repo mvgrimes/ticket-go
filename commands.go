@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 // ListOptions contains options for listing tickets.
@@ -505,6 +506,55 @@ func (s *Store) FindCycles() ([]Cycle, error) {
 	}
 
 	return cycles, nil
+}
+
+// TicketSummaryJSON is the JSON format for --json output on list/show commands.
+type TicketSummaryJSON struct {
+	ID              string `json:"id"`
+	Title           string `json:"title"`
+	Status          string `json:"status"`
+	Priority        int    `json:"priority"`
+	IssueType       string `json:"issue_type"`
+	Owner           string `json:"owner"`
+	CreatedAt       string `json:"created_at"`
+	CreatedBy       string `json:"created_by"`
+	UpdatedAt       string `json:"updated_at"`
+	DependencyCount int    `json:"dependency_count"`
+	DependentCount  int    `json:"dependent_count"`
+	CommentCount    int    `json:"comment_count"`
+}
+
+// NewTicketSummaryJSON builds a TicketSummaryJSON from a ticket and computed fields.
+func NewTicketSummaryJSON(t *Ticket, dependentCount, commentCount int, updatedAt time.Time) TicketSummaryJSON {
+	return TicketSummaryJSON{
+		ID:              t.ID,
+		Title:           t.Title,
+		Status:          string(t.Status),
+		Priority:        t.Priority,
+		IssueType:       t.Type,
+		Owner:           t.Assignee,
+		CreatedAt:       t.Created.Format("2006-01-02T15:04:05Z"),
+		CreatedBy:       t.Assignee,
+		UpdatedAt:       updatedAt.Format("2006-01-02T15:04:05Z"),
+		DependencyCount: len(t.Deps),
+		DependentCount:  dependentCount,
+		CommentCount:    commentCount,
+	}
+}
+
+// CountComments counts timestamped notes in a ticket body.
+// Notes are added by add-note as bold ISO8601 timestamp lines.
+func CountComments(body string) int {
+	count := 0
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if len(line) > 4 && strings.HasPrefix(line, "**") && strings.HasSuffix(line, "**") {
+			if _, err := time.Parse("2006-01-02T15:04:05Z", line[2:len(line)-2]); err == nil {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 // TicketJSON represents a ticket in JSON format for the query command.
