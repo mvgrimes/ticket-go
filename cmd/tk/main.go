@@ -12,7 +12,7 @@ import (
 	"golang.org/x/term"
 )
 
-var version = "0.4.5"
+var version = "0.4.6"
 
 // Global writers for output - can be overridden in tests
 var (
@@ -180,7 +180,9 @@ func cmdCreate(store *ticket.Store, args []string) error {
 			return fmt.Errorf("Error: %v", err)
 		}
 
-		openEditor(path)
+		if isTerminal(os.Stdin) && isTerminal(os.Stdout) {
+			openEditor(path)
+		}
 	}
 
 	fmt.Fprintln(stdout, t.ID)
