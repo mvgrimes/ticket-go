@@ -8,6 +8,7 @@
 
 # tmp, system and ref files
 tmp/
+_tmp/
 .DS_Store
 /docs/ref/
 /trees/
