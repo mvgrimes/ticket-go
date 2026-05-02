@@ -8,7 +8,8 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/kardianos/ticket"
+	ticket "github.com/kardianos/ticket"
+	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
 
@@ -20,6 +21,12 @@ var (
 	stderr io.Writer = os.Stderr
 )
 
+// app holds shared state for all commands in a single invocation.
+type app struct {
+	store *ticket.Store
+	out   io.Writer
+}
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(stderr, err)
@@ -27,465 +34,405 @@ func main() {
 	}
 }
 
-// run executes the CLI with the given arguments.
-// This is the main entry point, extracted for testability.
+// run is the testable entry point.
 func run(args []string) error {
-	if len(args) < 1 {
-		printHelp()
-		return nil
+	root := buildRootCmd(stdout, stderr)
+	root.SetArgs(args)
+	return root.Execute()
+}
+
+// buildRootCmd constructs the complete cobra command tree.
+func buildRootCmd(out, errOut io.Writer) *cobra.Command {
+	a := &app{out: out}
+
+	root := &cobra.Command{
+		Use:           "tk",
+		Short:         "tk - minimal ticket system with dependency tracking",
+		Long:          helpText,
+		SilenceUsage:  true,
+		SilenceErrors: true,
 	}
+	root.SetOut(out)
+	root.SetErr(errOut)
 
-	cmd := args[0]
-
-	// Help doesn't need tickets dir
-	if cmd == "help" || cmd == "--help" || cmd == "-h" {
-		printHelp()
-		return nil
-	}
-
-	// Initialize tickets directory
-	writeCommands := map[string]bool{"create": true}
-
-	var store *ticket.Store
-
-	if writeCommands[cmd] {
-		// Write commands can create .tickets if not found
-		dir, err := ticket.FindTicketsDir()
-		if err != nil {
-			dir = ".tickets"
+	// Initialise the ticket store before every command except the built-in help.
+	root.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
+		if cmd.Name() == "help" || cmd.Name() == "completion" {
+			return nil
 		}
-		store = ticket.NewStore(dir)
-	} else {
-		// Read commands need existing .tickets
+		if cmd.Name() == "create" {
+			// create is allowed to bootstrap a new .tickets dir
+			dir, err := ticket.FindTicketsDir()
+			if err != nil {
+				dir = ".tickets"
+			}
+			a.store = ticket.NewStore(dir)
+			return nil
+		}
 		dir, err := ticket.FindTicketsDir()
 		if err != nil {
 			return fmt.Errorf("Error: %v\nRun 'tk create' to initialize, or set TICKETS_DIR env var", err)
 		}
-		store = ticket.NewStore(dir)
+		a.store = ticket.NewStore(dir)
+		return nil
 	}
 
-	cmdArgs := args[1:]
+	root.AddCommand(
+		a.newCreateCmd(),
+		a.newStartCmd(),
+		a.newCloseCmd(),
+		a.newReopenCmd(),
+		a.newStatusCmd(),
+		a.newDepCmd(),
+		a.newUndepCmd(),
+		a.newLinkCmd(),
+		a.newUnlinkCmd(),
+		a.newListCmd(),
+		a.newReadyCmd(),
+		a.newBlockedCmd(),
+		a.newClosedCmd(),
+		a.newShowCmd(),
+		a.newEditCmd(),
+		a.newAddNoteCmd(),
+		a.newQueryCmd(),
+	)
 
-	switch cmd {
-	case "create":
-		return cmdCreate(store, cmdArgs)
-	case "start":
-		return cmdStart(store, cmdArgs)
-	case "close":
-		return cmdClose(store, cmdArgs)
-	case "reopen":
-		return cmdReopen(store, cmdArgs)
-	case "status":
-		return cmdStatus(store, cmdArgs)
-	case "dep":
-		return cmdDep(store, cmdArgs)
-	case "undep":
-		return cmdUndep(store, cmdArgs)
-	case "link":
-		return cmdLink(store, cmdArgs)
-	case "unlink":
-		return cmdUnlink(store, cmdArgs)
-	case "ls", "list":
-		return cmdList(store, cmdArgs)
-	case "ready":
-		return cmdReady(store, cmdArgs)
-	case "blocked":
-		return cmdBlocked(store, cmdArgs)
-	case "closed":
-		return cmdClosed(store, cmdArgs)
-	case "show":
-		return cmdShow(store, cmdArgs)
-	case "edit":
-		return cmdEdit(store, cmdArgs)
-	case "add-note":
-		return cmdAddNote(store, cmdArgs)
-	case "query":
-		return cmdQuery(store, cmdArgs)
-	default:
-		printHelp()
-		return fmt.Errorf("unknown command: %s", cmd)
-	}
+	return root
 }
 
-func cmdCreate(store *ticket.Store, args []string) error {
-	opts := ticket.CreateOptions{}
+// ── create ──────────────────────────────────────────────────────────────────
 
-	// Parse args
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		switch {
-		case arg == "-d" || arg == "--description":
-			if i+1 < len(args) {
-				opts.Description = args[i+1]
-				i++
+func (a *app) newCreateCmd() *cobra.Command {
+	var (
+		description string
+		design      string
+		acceptance  string
+		ticketType  string
+		priority    int
+		assignee    string
+		externalRef string
+		parent      string
+		tagsStr     string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "create [title]",
+		Short: "Create ticket, prints ID",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			opts := ticket.CreateOptions{
+				Description: description,
+				Design:      design,
+				Acceptance:  acceptance,
+				Type:        ticketType,
+				Assignee:    assignee,
+				ExternalRef: externalRef,
+				Parent:      parent,
 			}
-		case arg == "--design":
-			if i+1 < len(args) {
-				opts.Design = args[i+1]
-				i++
+			if len(args) > 0 {
+				opts.Title = strings.Join(args, " ")
 			}
-		case arg == "--acceptance":
-			if i+1 < len(args) {
-				opts.Acceptance = args[i+1]
-				i++
-			}
-		case arg == "-p" || arg == "--priority":
-			if i+1 < len(args) {
-				fmt.Sscanf(args[i+1], "%d", &opts.Priority)
+			if cmd.Flags().Changed("priority") {
+				opts.Priority = priority
 				opts.PrioritySet = true
-				i++
 			}
-		case arg == "-t" || arg == "--type":
-			if i+1 < len(args) {
-				opts.Type = args[i+1]
-				i++
+			if tagsStr != "" {
+				opts.Tags = strings.Split(tagsStr, ",")
 			}
-		case arg == "-a" || arg == "--assignee":
-			if i+1 < len(args) {
-				opts.Assignee = args[i+1]
-				i++
+
+			t, err := a.store.Create(opts)
+			if err != nil {
+				return err
 			}
-		case arg == "--external-ref":
-			if i+1 < len(args) {
-				opts.ExternalRef = args[i+1]
-				i++
+			if opts.Title == "" && isTerminal(os.Stdin) && isTerminal(os.Stdout) {
+				path, err := a.store.GetTicketPath(t.ID)
+				if err != nil {
+					return fmt.Errorf("Error: %v", err)
+				}
+				if err := openEditor(path, a.out); err != nil {
+					return err
+				}
 			}
-		case arg == "--parent":
-			if i+1 < len(args) {
-				opts.Parent = args[i+1]
-				i++
-			}
-		case arg == "--tags":
-			if i+1 < len(args) {
-				opts.Tags = strings.Split(args[i+1], ",")
-				i++
-			}
-		case strings.HasPrefix(arg, "-"):
-			return fmt.Errorf("unknown option: %s", arg)
-		default:
-			if opts.Title == "" {
-				opts.Title = arg
-			}
-		}
+			fmt.Fprintln(a.out, t.ID)
+			return nil
+		},
 	}
 
-	t, err := store.Create(opts)
-	if err != nil {
-		return err
-	}
+	cmd.Flags().StringVarP(&description, "description", "d", "", "Description text")
+	cmd.Flags().StringVar(&design, "design", "", "Design notes")
+	cmd.Flags().StringVar(&acceptance, "acceptance", "", "Acceptance criteria")
+	cmd.Flags().StringVarP(&ticketType, "type", "t", "", "Type (bug|feature|task|epic|chore)")
+	cmd.Flags().IntVarP(&priority, "priority", "p", 2, "Priority 0-4, 0=highest")
+	cmd.Flags().StringVarP(&assignee, "assignee", "a", "", "Assignee")
+	cmd.Flags().StringVar(&externalRef, "external-ref", "", "External reference (e.g., gh-123, JIRA-456)")
+	cmd.Flags().StringVar(&parent, "parent", "", "Parent ticket ID")
+	cmd.Flags().StringVar(&tagsStr, "tags", "", "Comma-separated tags (e.g., ui,backend,urgent)")
 
-	if opts.Title == "" {
-		path, err := store.GetTicketPath(t.ID)
-		if err != nil {
-			return fmt.Errorf("Error: %v", err)
-		}
-
-		if isTerminal(os.Stdin) && isTerminal(os.Stdout) {
-			openEditor(path)
-		}
-	}
-
-	fmt.Fprintln(stdout, t.ID)
-	return nil
+	return cmd
 }
 
-func cmdStart(store *ticket.Store, args []string) error {
-	if len(args) < 1 {
-		return fmt.Errorf("usage: tk start <id>")
+// ── status shortcuts ─────────────────────────────────────────────────────────
+
+func (a *app) newStartCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "start <id>",
+		Short: "Set status to in_progress",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return a.setStatus(args[0], "in_progress")
+		},
 	}
-	return setStatus(store, args[0], "in_progress")
 }
 
-func cmdClose(store *ticket.Store, args []string) error {
-	if len(args) < 1 {
-		return fmt.Errorf("usage: tk close <id>")
+func (a *app) newCloseCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "close <id>",
+		Short: "Set status to closed",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return a.setStatus(args[0], "closed")
+		},
 	}
-	return setStatus(store, args[0], "closed")
 }
 
-func cmdReopen(store *ticket.Store, args []string) error {
-	if len(args) < 1 {
-		return fmt.Errorf("usage: tk reopen <id>")
+func (a *app) newReopenCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "reopen <id>",
+		Short: "Set status to open",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return a.setStatus(args[0], "open")
+		},
 	}
-	return setStatus(store, args[0], "open")
 }
 
-func cmdStatus(store *ticket.Store, args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("usage: tk status <id> <status>\nValid statuses: open in_progress closed")
+func (a *app) newStatusCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status <id> <status>",
+		Short: "Update status (open|in_progress|closed)",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return a.setStatus(args[0], args[1])
+		},
 	}
-	return setStatus(store, args[0], args[1])
 }
 
-func setStatus(store *ticket.Store, partial, status string) error {
+func (a *app) setStatus(partial, status string) error {
 	if !ticket.IsValidStatus(status) {
 		return fmt.Errorf("Error: invalid status '%s'. Must be one of: open in_progress closed", status)
 	}
-
-	id, err := store.ResolveID(partial)
+	id, err := a.store.ResolveID(partial)
 	if err != nil {
 		return fmt.Errorf("Error: %v", err)
 	}
-
-	if err := store.UpdateField(id, "status", status); err != nil {
+	if err := a.store.UpdateField(id, "status", status); err != nil {
 		return err
 	}
-
-	fmt.Fprintf(stdout, "Updated %s -> %s\n", id, status)
+	fmt.Fprintf(a.out, "Updated %s -> %s\n", id, status)
 	return nil
 }
 
-func cmdDep(store *ticket.Store, args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("usage: tk dep <id> <dependency-id>\n       tk dep tree <id>\n       tk dep cycle")
-	}
+// ── dep ──────────────────────────────────────────────────────────────────────
 
-	// Handle subcommands
-	if args[0] == "tree" {
-		return cmdDepTree(store, args[1:])
-	}
-	if args[0] == "cycle" {
-		return cmdDepCycle(store)
-	}
-
-	if len(args) < 2 {
-		return fmt.Errorf("usage: tk dep <id> <dependency-id>")
-	}
-
-	id, err := store.ResolveID(args[0])
-	if err != nil {
-		return fmt.Errorf("Error: %v", err)
-	}
-
-	depID, err := store.ResolveID(args[1])
-	if err != nil {
-		return fmt.Errorf("Error: %v", err)
-	}
-
-	// Check if already exists
-	t, err := store.Load(id)
-	if err != nil {
-		return err
-	}
-
-	if t.HasDep(depID) {
-		fmt.Fprintln(stdout, "Dependency already exists")
-		return nil
-	}
-
-	if err := store.AddDep(id, depID); err != nil {
-		return err
-	}
-
-	fmt.Fprintf(stdout, "Added dependency: %s -> %s\n", id, depID)
-	return nil
-}
-
-func cmdDepTree(store *ticket.Store, args []string) error {
-	fullMode := false
-	var rootID string
-
-	for _, arg := range args {
-		if arg == "--full" {
-			fullMode = true
-		} else {
-			rootID = arg
-		}
-	}
-
-	if rootID == "" {
-		return fmt.Errorf("usage: tk dep tree [--full] <id>")
-	}
-
-	id, err := store.ResolveID(rootID)
-	if err != nil {
-		return fmt.Errorf("Error: %v", err)
-	}
-
-	tree, err := store.GetDepTree(id, fullMode)
-	if err != nil {
-		return fmt.Errorf("Error: %v", err)
-	}
-
-	output := ticket.PrintDepTree(tree, "", true, true)
-	fmt.Fprint(stdout, output)
-	return nil
-}
-
-func cmdDepCycle(store *ticket.Store) error {
-	cycles, err := store.FindCycles()
-	if err != nil {
-		return err
-	}
-
-	if len(cycles) == 0 {
-		fmt.Fprintln(stdout, "No dependency cycles found")
-		return nil
-	}
-
-	for i, cycle := range cycles {
-		if i > 0 {
-			fmt.Fprintln(stdout)
-		}
-		fmt.Fprintf(stdout, "Cycle %d: %s\n", i+1, strings.Join(cycle.Path, " -> "))
-		for _, t := range cycle.Tickets {
-			fmt.Fprintf(stdout, "  %-8s [%s] %s\n", t.ID, t.Status, t.Title)
-		}
-	}
-
-	return nil
-}
-
-func cmdUndep(store *ticket.Store, args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("usage: tk undep <id> <dependency-id>")
-	}
-
-	id, err := store.ResolveID(args[0])
-	if err != nil {
-		return fmt.Errorf("Error: %v", err)
-	}
-
-	depID, err := store.ResolveID(args[1])
-	if err != nil {
-		return fmt.Errorf("Error: %v", err)
-	}
-
-	if err := store.RemoveDep(id, depID); err != nil {
-		if err.Error() == "dependency not found" {
-			fmt.Fprintln(stdout, "Dependency not found")
-			return fmt.Errorf("")
-		}
-		return err
-	}
-
-	fmt.Fprintf(stdout, "Removed dependency: %s -/-> %s\n", id, depID)
-	return nil
-}
-
-func cmdLink(store *ticket.Store, args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("usage: tk link <id> <id> [id...]")
-	}
-
-	// Resolve all IDs first to check they exist
-	ids := make([]string, len(args))
-	for i, arg := range args {
-		id, err := store.ResolveID(arg)
-		if err != nil {
-			return fmt.Errorf("Error: %v", err)
-		}
-		ids[i] = id
-	}
-
-	count, err := store.LinkTickets(ids)
-	if err != nil {
-		return err
-	}
-
-	if count == 0 {
-		fmt.Fprintln(stdout, "All links already exist")
-	} else {
-		fmt.Fprintf(stdout, "Added %d link(s) between %d tickets\n", count, len(ids))
-	}
-
-	return nil
-}
-
-func cmdUnlink(store *ticket.Store, args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("usage: tk unlink <id> <target-id>")
-	}
-
-	id, err := store.ResolveID(args[0])
-	if err != nil {
-		return fmt.Errorf("Error: %v", err)
-	}
-
-	targetID, err := store.ResolveID(args[1])
-	if err != nil {
-		return fmt.Errorf("Error: %v", err)
-	}
-
-	// Check if link exists
-	t, err := store.Load(id)
-	if err != nil {
-		return err
-	}
-
-	if !t.HasLink(targetID) {
-		fmt.Fprintln(stdout, "Link not found")
-		return fmt.Errorf("")
-	}
-
-	// Remove from both
-	if err := store.RemoveLink(id, targetID); err != nil {
-		return err
-	}
-	if err := store.RemoveLink(targetID, id); err != nil {
-		// Ignore if not found in target
-	}
-
-	fmt.Fprintf(stdout, "Removed link: %s <-> %s\n", id, targetID)
-	return nil
-}
-
-func parseListOpts(args []string) (ticket.ListOptions, bool) {
-	opts := ticket.ListOptions{}
-	jsonOut := false
-
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		switch {
-		case arg == "--status":
-			if i+1 < len(args) {
-				opts.Status = args[i+1]
-				i++
+func (a *app) newDepCmd() *cobra.Command {
+	depCmd := &cobra.Command{
+		Use:   "dep <id> <dep-id>",
+		Short: "Add dependency (id depends on dep-id)",
+		// ArbitraryArgs lets non-subcommand positional args through to RunE.
+		Args: cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) < 2 {
+				return fmt.Errorf("usage: tk dep <id> <dependency-id>\n       tk dep tree <id>\n       tk dep cycle")
 			}
-		case arg == "--json":
-			jsonOut = true
-		case strings.HasPrefix(arg, "--status="):
-			opts.Status = strings.TrimPrefix(arg, "--status=")
-		case arg == "-a":
-			if i+1 < len(args) {
-				opts.Assignee = args[i+1]
-				i++
+			id, err := a.store.ResolveID(args[0])
+			if err != nil {
+				return fmt.Errorf("Error: %v", err)
 			}
-		case strings.HasPrefix(arg, "--assignee="):
-			opts.Assignee = strings.TrimPrefix(arg, "--assignee=")
-		case arg == "-T":
-			if i+1 < len(args) {
-				opts.Tag = args[i+1]
-				i++
+			depID, err := a.store.ResolveID(args[1])
+			if err != nil {
+				return fmt.Errorf("Error: %v", err)
 			}
-		case strings.HasPrefix(arg, "--tag="):
-			opts.Tag = strings.TrimPrefix(arg, "--tag=")
-		case arg == "-t":
-			if i+1 < len(args) {
-				opts.Type = args[i+1]
-				i++
+			t, err := a.store.Load(id)
+			if err != nil {
+				return err
 			}
-		case strings.HasPrefix(arg, "--type="):
-			opts.Type = strings.TrimPrefix(arg, "--type=")
-		}
+			if t.HasDep(depID) {
+				fmt.Fprintln(a.out, "Dependency already exists")
+				return nil
+			}
+			if err := a.store.AddDep(id, depID); err != nil {
+				return err
+			}
+			fmt.Fprintf(a.out, "Added dependency: %s -> %s\n", id, depID)
+			return nil
+		},
 	}
 
-	return opts, jsonOut
+	var fullMode bool
+	treeCmd := &cobra.Command{
+		Use:   "tree <id>",
+		Short: "Show dependency tree",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := a.store.ResolveID(args[0])
+			if err != nil {
+				return fmt.Errorf("Error: %v", err)
+			}
+			tree, err := a.store.GetDepTree(id, fullMode)
+			if err != nil {
+				return fmt.Errorf("Error: %v", err)
+			}
+			fmt.Fprint(a.out, ticket.PrintDepTree(tree, "", true, true))
+			return nil
+		},
+	}
+	treeCmd.Flags().BoolVar(&fullMode, "full", false, "Disable deduplication in tree output")
+
+	cycleCmd := &cobra.Command{
+		Use:   "cycle",
+		Short: "Find dependency cycles in open tickets",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cycles, err := a.store.FindCycles()
+			if err != nil {
+				return err
+			}
+			if len(cycles) == 0 {
+				fmt.Fprintln(a.out, "No dependency cycles found")
+				return nil
+			}
+			for i, cycle := range cycles {
+				if i > 0 {
+					fmt.Fprintln(a.out)
+				}
+				fmt.Fprintf(a.out, "Cycle %d: %s\n", i+1, strings.Join(cycle.Path, " -> "))
+				for _, t := range cycle.Tickets {
+					fmt.Fprintf(a.out, "  %-8s [%s] %s\n", t.ID, t.Status, t.Title)
+				}
+			}
+			return nil
+		},
+	}
+
+	depCmd.AddCommand(treeCmd, cycleCmd)
+	return depCmd
 }
 
-func printTicketsJSON(store *ticket.Store, tickets []*ticket.Ticket) error {
-	dependentMap, err := store.BuildDependentMap()
+// ── undep ────────────────────────────────────────────────────────────────────
+
+func (a *app) newUndepCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "undep <id> <dep-id>",
+		Short: "Remove dependency",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := a.store.ResolveID(args[0])
+			if err != nil {
+				return fmt.Errorf("Error: %v", err)
+			}
+			depID, err := a.store.ResolveID(args[1])
+			if err != nil {
+				return fmt.Errorf("Error: %v", err)
+			}
+			if err := a.store.RemoveDep(id, depID); err != nil {
+				if err.Error() == "dependency not found" {
+					fmt.Fprintln(a.out, "Dependency not found")
+					return fmt.Errorf("")
+				}
+				return err
+			}
+			fmt.Fprintf(a.out, "Removed dependency: %s -/-> %s\n", id, depID)
+			return nil
+		},
+	}
+}
+
+// ── link / unlink ─────────────────────────────────────────────────────────────
+
+func (a *app) newLinkCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "link <id> <id> [id...]",
+		Short: "Link tickets together (symmetric)",
+		Args:  cobra.MinimumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ids := make([]string, len(args))
+			for i, arg := range args {
+				id, err := a.store.ResolveID(arg)
+				if err != nil {
+					return fmt.Errorf("Error: %v", err)
+				}
+				ids[i] = id
+			}
+			count, err := a.store.LinkTickets(ids)
+			if err != nil {
+				return err
+			}
+			if count == 0 {
+				fmt.Fprintln(a.out, "All links already exist")
+			} else {
+				fmt.Fprintf(a.out, "Added %d link(s) between %d tickets\n", count, len(ids))
+			}
+			return nil
+		},
+	}
+}
+
+func (a *app) newUnlinkCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "unlink <id> <target-id>",
+		Short: "Remove link between tickets",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := a.store.ResolveID(args[0])
+			if err != nil {
+				return fmt.Errorf("Error: %v", err)
+			}
+			targetID, err := a.store.ResolveID(args[1])
+			if err != nil {
+				return fmt.Errorf("Error: %v", err)
+			}
+			t, err := a.store.Load(id)
+			if err != nil {
+				return err
+			}
+			if !t.HasLink(targetID) {
+				fmt.Fprintln(a.out, "Link not found")
+				return fmt.Errorf("")
+			}
+			if err := a.store.RemoveLink(id, targetID); err != nil {
+				return err
+			}
+			// Best-effort removal from target side; ignore if already absent.
+			_ = a.store.RemoveLink(targetID, id)
+			fmt.Fprintf(a.out, "Removed link: %s <-> %s\n", id, targetID)
+			return nil
+		},
+	}
+}
+
+// ── list / ls / ready / blocked / closed ─────────────────────────────────────
+
+// addListFlags registers the shared filter flags onto cmd and writes the
+// parsed values into opts.
+func addListFlags(cmd *cobra.Command, opts *ticket.ListOptions) {
+	cmd.Flags().StringVar(&opts.Status, "status", "", "Filter by status (open|in_progress|closed)")
+	cmd.Flags().StringVarP(&opts.Assignee, "assignee", "a", "", "Filter by assignee")
+	cmd.Flags().StringVarP(&opts.Tag, "tag", "T", "", "Filter by tag")
+	cmd.Flags().StringVarP(&opts.Type, "type", "t", "", "Filter by type")
+}
+
+func (a *app) printTicketsJSON(tickets []*ticket.Ticket) error {
+	dependentMap, err := a.store.BuildDependentMap()
 	if err != nil {
 		return err
 	}
 
 	summaries := make([]ticket.TicketSummaryJSON, 0, len(tickets))
 	for _, t := range tickets {
-		full, err := store.Load(t.ID)
+		full, err := a.store.Load(t.ID)
 		if err != nil {
 			full = t
 		}
-		mtime := store.GetMtime(t.ID)
+		mtime := a.store.GetMtime(t.ID)
 		summary := ticket.NewTicketSummaryJSON(full, dependentMap[t.ID], ticket.CountComments(full.Body), mtime)
 		summaries = append(summaries, summary)
 	}
@@ -494,162 +441,243 @@ func printTicketsJSON(store *ticket.Store, tickets []*ticket.Ticket) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, string(data))
-
+	fmt.Fprintln(a.out, string(data))
 	return nil
 }
 
-func cmdList(store *ticket.Store, args []string) error {
-	opts, jsonOut := parseListOpts(args)
-
-	tickets, err := store.ListTicketsFiltered(opts)
-	if err != nil {
-		return err
+func (a *app) newListCmd() *cobra.Command {
+	opts := ticket.ListOptions{}
+	var jsonOut bool
+	cmd := &cobra.Command{
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List tickets",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			tickets, err := a.store.ListTicketsFiltered(opts)
+			if err != nil {
+				return err
+			}
+			if jsonOut {
+				return a.printTicketsJSON(tickets)
+			}
+			for _, t := range tickets {
+				depStr := ""
+				if len(t.Deps) > 0 {
+					depStr = " <- [" + strings.Join(t.Deps, ", ") + "]"
+				}
+				fmt.Fprintf(a.out, "%-8s [%s] - %s%s\n", t.ID, t.Status, t.Title, depStr)
+			}
+			return nil
+		},
 	}
-
-	if jsonOut {
-		return printTicketsJSON(store, tickets)
-	}
-
-	for _, t := range tickets {
-		depsDisplay := "[]"
-		if len(t.Deps) > 0 {
-			depsDisplay = "[" + strings.Join(t.Deps, ", ") + "]"
-		}
-
-		depStr := ""
-		if depsDisplay != "[]" {
-			depStr = " <- " + depsDisplay
-		}
-
-		fmt.Fprintf(stdout, "%-8s [%s] - %s%s\n", t.ID, t.Status, t.Title, depStr)
-	}
-
-	return nil
+	addListFlags(cmd, &opts)
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	return cmd
 }
 
-func cmdReady(store *ticket.Store, args []string) error {
-	opts, jsonOut := parseListOpts(args)
-
-	tickets, err := store.ReadyTickets(opts)
-	if err != nil {
-		return err
+func (a *app) newReadyCmd() *cobra.Command {
+	opts := ticket.ListOptions{}
+	var jsonOut bool
+	cmd := &cobra.Command{
+		Use:   "ready",
+		Short: "List open/in-progress tickets with deps resolved",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			tickets, err := a.store.ReadyTickets(opts)
+			if err != nil {
+				return err
+			}
+			if jsonOut {
+				return a.printTicketsJSON(tickets)
+			}
+			for _, t := range tickets {
+				fmt.Fprintf(a.out, "%-8s [P%d][%s] - %s\n", t.ID, t.Priority, t.Status, t.Title)
+			}
+			return nil
+		},
 	}
-
-	if jsonOut {
-		return printTicketsJSON(store, tickets)
-	}
-
-	for _, t := range tickets {
-		fmt.Fprintf(stdout, "%-8s [P%d][%s] - %s\n", t.ID, t.Priority, t.Status, t.Title)
-	}
-
-	return nil
+	addListFlags(cmd, &opts)
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	return cmd
 }
 
-func cmdBlocked(store *ticket.Store, args []string) error {
-	opts, _ := parseListOpts(args)
-
-	tickets, blockers, err := store.BlockedTickets(opts)
-	if err != nil {
-		return err
+func (a *app) newBlockedCmd() *cobra.Command {
+	opts := ticket.ListOptions{}
+	cmd := &cobra.Command{
+		Use:   "blocked",
+		Short: "List open/in-progress tickets with unresolved deps",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			tickets, blockers, err := a.store.BlockedTickets(opts)
+			if err != nil {
+				return err
+			}
+			for i, t := range tickets {
+				blockerStr := "[" + strings.Join(blockers[i], ", ") + "]"
+				fmt.Fprintf(a.out, "%-8s [P%d][%s] - %s <- %s\n", t.ID, t.Priority, t.Status, t.Title, blockerStr)
+			}
+			return nil
+		},
 	}
-
-	for i, t := range tickets {
-		blockerStr := "[" + strings.Join(blockers[i], ", ") + "]"
-		fmt.Fprintf(stdout, "%-8s [P%d][%s] - %s <- %s\n", t.ID, t.Priority, t.Status, t.Title, blockerStr)
-	}
-
-	return nil
+	addListFlags(cmd, &opts)
+	return cmd
 }
 
-func cmdClosed(store *ticket.Store, args []string) error {
-	opts, jsonOut := parseListOpts(args)
+func (a *app) newClosedCmd() *cobra.Command {
+	opts := ticket.ListOptions{}
+	var jsonOut bool
 	limit := 20
-
-	// Parse limit
-	for i := 0; i < len(args); i++ {
-		if strings.HasPrefix(args[i], "--limit=") {
-			fmt.Sscanf(strings.TrimPrefix(args[i], "--limit="), "%d", &limit)
-		}
+	cmd := &cobra.Command{
+		Use:   "closed",
+		Short: "List recently closed tickets (default 20, sorted by mtime)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			tickets, err := a.store.ClosedTickets(opts, limit)
+			if err != nil {
+				return err
+			}
+			if jsonOut {
+				return a.printTicketsJSON(tickets)
+			}
+			for _, t := range tickets {
+				fmt.Fprintf(a.out, "%-8s [%s] - %s\n", t.ID, t.Status, t.Title)
+			}
+			return nil
+		},
 	}
-
-	tickets, err := store.ClosedTickets(opts, limit)
-	if err != nil {
-		return err
-	}
-
-	if jsonOut {
-		return printTicketsJSON(store, tickets)
-	}
-
-	for _, t := range tickets {
-		fmt.Fprintf(stdout, "%-8s [%s] - %s\n", t.ID, t.Status, t.Title)
-	}
-
-	return nil
+	addListFlags(cmd, &opts)
+	cmd.Flags().IntVar(&limit, "limit", 20, "Maximum tickets to return")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	return cmd
 }
 
-func cmdShow(store *ticket.Store, args []string) error {
-	jsonOut := false
-	var idArg string
-	for _, arg := range args {
-		if arg == "--json" {
-			jsonOut = true
-		} else if idArg == "" {
-			idArg = arg
-		}
+// ── show ─────────────────────────────────────────────────────────────────────
+
+func (a *app) newShowCmd() *cobra.Command {
+	var jsonOut bool
+	cmd := &cobra.Command{
+		Use:   "show <id>",
+		Short: "Display ticket",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := a.store.ResolveID(args[0])
+			if err != nil {
+				return fmt.Errorf("Error: %v", err)
+			}
+			if jsonOut {
+				t, err := a.store.Load(id)
+				if err != nil {
+					return fmt.Errorf("Error: %v", err)
+				}
+				dependentMap, err := a.store.BuildDependentMap()
+				if err != nil {
+					return err
+				}
+				mtime := a.store.GetMtime(id)
+				summary := ticket.NewTicketSummaryJSON(t, dependentMap[id], ticket.CountComments(t.Body), mtime)
+				data, err := json.Marshal(summary)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintln(a.out, string(data))
+				return nil
+			}
+			info, err := a.store.GetShowInfo(id)
+			if err != nil {
+				return fmt.Errorf("Error: %v", err)
+			}
+			output := ticket.FormatShowInfo(info)
+			pager := os.Getenv("TICKET_PAGER")
+			if pager == "" {
+				pager = os.Getenv("PAGER")
+			}
+			if pager != "" && isTerminal(os.Stdout) {
+				return runWithPager(output, pager)
+			}
+			fmt.Fprint(a.out, output)
+			return nil
+		},
 	}
-
-	if idArg == "" {
-		return fmt.Errorf("usage: tk show <id>")
-	}
-
-	id, err := store.ResolveID(idArg)
-	if err != nil {
-		return fmt.Errorf("Error: %v", err)
-	}
-
-	if jsonOut {
-		t, err := store.Load(id)
-		if err != nil {
-			return fmt.Errorf("Error: %v", err)
-		}
-		dependentMap, err := store.BuildDependentMap()
-		if err != nil {
-			return err
-		}
-		mtime := store.GetMtime(id)
-		summary := ticket.NewTicketSummaryJSON(t, dependentMap[id], ticket.CountComments(t.Body), mtime)
-		data, err := json.Marshal(summary)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintln(stdout, string(data))
-		return nil
-	}
-
-	info, err := store.GetShowInfo(id)
-	if err != nil {
-		return fmt.Errorf("Error: %v", err)
-	}
-
-	output := ticket.FormatShowInfo(info)
-
-	// Check for pager
-	pager := os.Getenv("TICKET_PAGER")
-	if pager == "" {
-		pager = os.Getenv("PAGER")
-	}
-
-	// Only use pager if stdout is a terminal
-	if pager != "" && isTerminal(os.Stdout) {
-		return runWithPager(output, pager)
-	}
-
-	fmt.Fprint(stdout, output)
-	return nil
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	return cmd
 }
+
+// ── edit ─────────────────────────────────────────────────────────────────────
+
+func (a *app) newEditCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "edit <id>",
+		Short: "Open ticket in $EDITOR",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path, err := a.store.GetTicketPath(args[0])
+			if err != nil {
+				return fmt.Errorf("Error: %v", err)
+			}
+			return openEditor(path, a.out)
+		},
+	}
+}
+
+// ── add-note ──────────────────────────────────────────────────────────────────
+
+func (a *app) newAddNoteCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "add-note <id> [text]",
+		Short: "Append timestamped note (or pipe via stdin)",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := a.store.ResolveID(args[0])
+			if err != nil {
+				return fmt.Errorf("Error: %v", err)
+			}
+			var note string
+			if len(args) > 1 {
+				note = strings.Join(args[1:], " ")
+			} else if !isTerminal(os.Stdin) {
+				data, err := io.ReadAll(os.Stdin)
+				if err != nil {
+					return err
+				}
+				note = strings.TrimSpace(string(data))
+			} else {
+				return fmt.Errorf("Error: no note provided")
+			}
+			if err := a.store.AddNote(id, note); err != nil {
+				return err
+			}
+			fmt.Fprintf(a.out, "Note added to %s\n", id)
+			return nil
+		},
+	}
+}
+
+// ── query ─────────────────────────────────────────────────────────────────────
+
+func (a *app) newQueryCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "query [filter]",
+		Short: "Output tickets as JSON (filter: status=open, priority<2, or jq expr)",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			filter := ""
+			if len(args) > 0 {
+				filter = args[0]
+			}
+			tickets, err := a.store.QueryTicketsFiltered(filter)
+			if err != nil {
+				return err
+			}
+			for _, t := range tickets {
+				data, err := json.Marshal(t)
+				if err != nil {
+					continue
+				}
+				fmt.Fprintln(a.out, string(data))
+			}
+			return nil
+		},
+	}
+}
+
+// ── helpers ───────────────────────────────────────────────────────────────────
 
 func isTerminal(f *os.File) bool {
 	return term.IsTerminal(int(f.Fd()))
@@ -659,40 +687,21 @@ func runWithPager(content, pager string) error {
 	cmd := exec.Command("sh", "-c", pager)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		fmt.Fprint(stdout, content)
 		return nil
 	}
-
 	if err := cmd.Start(); err != nil {
 		fmt.Fprint(stdout, content)
 		return nil
 	}
-
 	io.WriteString(stdin, content)
 	stdin.Close()
-
 	return cmd.Wait()
 }
 
-func cmdEdit(store *ticket.Store, args []string) error {
-	if len(args) < 1 {
-		return fmt.Errorf("usage: tk edit <id>")
-	}
-
-	path, err := store.GetTicketPath(args[0])
-	if err != nil {
-		return fmt.Errorf("Error: %v", err)
-	}
-
-	return openEditor(path)
-}
-
-func openEditor(path string) error {
-
-	// Check if running in TTY
+func openEditor(path string, out io.Writer) error {
 	if isTerminal(os.Stdin) && isTerminal(os.Stdout) {
 		editor := os.Getenv("EDITOR")
 		if editor == "" {
@@ -706,75 +715,17 @@ func openEditor(path string) error {
 		if editor == "" {
 			return fmt.Errorf("no editor found (set EDITOR or install micro, nano, or vi)")
 		}
-
 		cmd := exec.Command(editor, path)
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
-
 		return cmd.Run()
 	}
-
-	fmt.Fprintf(stdout, "Edit ticket file: %s\n", path)
+	fmt.Fprintf(out, "Edit ticket file: %s\n", path)
 	return nil
 }
 
-func cmdAddNote(store *ticket.Store, args []string) error {
-	if len(args) < 1 {
-		return fmt.Errorf("usage: tk add-note <id> [note text]")
-	}
-
-	id, err := store.ResolveID(args[0])
-	if err != nil {
-		return fmt.Errorf("Error: %v", err)
-	}
-
-	var note string
-	if len(args) > 1 {
-		note = strings.Join(args[1:], " ")
-	} else if !isTerminal(os.Stdin) {
-		// Read from stdin
-		data, err := io.ReadAll(os.Stdin)
-		if err != nil {
-			return err
-		}
-		note = strings.TrimSpace(string(data))
-	} else {
-		return fmt.Errorf("Error: no note provided")
-	}
-
-	if err := store.AddNote(id, note); err != nil {
-		return err
-	}
-
-	fmt.Fprintf(stdout, "Note added to %s\n", id)
-	return nil
-}
-
-func cmdQuery(store *ticket.Store, args []string) error {
-	filter := ""
-	if len(args) > 0 {
-		filter = args[0]
-	}
-
-	tickets, err := store.QueryTicketsFiltered(filter)
-	if err != nil {
-		return err
-	}
-
-	for _, t := range tickets {
-		data, err := json.Marshal(t)
-		if err != nil {
-			continue
-		}
-		fmt.Fprintln(stdout, string(data))
-	}
-
-	return nil
-}
-
-func printHelp() {
-	fmt.Fprint(stdout, `tk - minimal ticket system with dependency tracking
+var helpText = `tk - minimal ticket system with dependency tracking
 
 Usage: tk <command> [args]
 
@@ -810,5 +761,4 @@ Commands:
 
 Tickets stored as markdown files in .tickets/
 Supports partial ID matching (e.g., 'tk show 5c4' matches 'nw-5c46')
-`)
-}
+`
