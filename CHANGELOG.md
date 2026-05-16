@@ -15,6 +15,7 @@
 ### Fixed
 - `create` without a title now uses a temporary draft file in `$EDITOR` and only creates a ticket when the draft is modified
 - `edit` now accepts an empty ID and creates a new ticket (matching `create` without a title)
+- `edit` now validates edited tickets and rejects invalid frontmatter, headings, IDs, status/type, timestamps, priorities, and dependency/link IDs
 
 ## [0.3.1] - 2026-01-28
 

@@ -80,6 +80,8 @@ When `create` is run without a title, `tk` writes a draft to a temporary file an
 
 When `edit` is run without an ID, it behaves like `create` without a title and creates a new ticket.
 
+After `edit` returns, `tk` validates the ticket structure (frontmatter, title heading, IDs, status/type, timestamp, and priority) before accepting the result.
+
 ## JSON Output
 
 The `list`, `ready`, `closed`, and `show` commands accept a `--json` flag.

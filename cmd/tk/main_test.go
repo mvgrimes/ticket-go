@@ -1804,6 +1804,54 @@ func TestEdit(t *testing.T) {
 		e.run("edit", "0001").assertSuccess()
 		e.assertOutputContains("edit-0001.md")
 	})
+
+	t.Run("edit fails when ticket heading is missing", func(t *testing.T) {
+		e := newTestEnv(t)
+		e.createTicket("edit-0001", "Editable ticket")
+		path := filepath.Join(e.ticketsDir, "edit-0001.md")
+		content := `---
+id: edit-0001
+status: open
+deps: []
+links: []
+created: 2026-01-01T00:00:00Z
+type: task
+priority: 2
+---
+Not a heading
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("failed to write ticket: %v", err)
+		}
+
+		e.run("edit", "edit-0001").assertFail()
+		e.assertOutputContains("edited ticket is invalid")
+		e.assertOutputContains("first content line must be a non-empty '# ' heading")
+	})
+
+	t.Run("edit fails when dependency id is invalid", func(t *testing.T) {
+		e := newTestEnv(t)
+		e.createTicket("edit-0001", "Editable ticket")
+		path := filepath.Join(e.ticketsDir, "edit-0001.md")
+		content := `---
+id: edit-0001
+status: open
+deps: [bad_dep]
+links: []
+created: 2026-01-01T00:00:00Z
+type: task
+priority: 2
+---
+# Editable ticket
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("failed to write ticket: %v", err)
+		}
+
+		e.run("edit", "edit-0001").assertFail()
+		e.assertOutputContains("edited ticket is invalid")
+		e.assertOutputContains("invalid dependency id")
+	})
 }
 
 // ============================================================================

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	ticket "github.com/kardianos/ticket"
@@ -612,14 +613,17 @@ func (a *app) newEditCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
+				path, err := a.store.GetTicketPath(t.ID)
+				if err != nil {
+					return fmt.Errorf("Error: %v", err)
+				}
 				if isTerminal(os.Stdin) && isTerminal(os.Stdout) {
-					path, err := a.store.GetTicketPath(t.ID)
-					if err != nil {
-						return fmt.Errorf("Error: %v", err)
-					}
 					if err := openEditor(path, a.out); err != nil {
 						return err
 					}
+				}
+				if err := a.validateEditedTicket(path); err != nil {
+					return err
 				}
 				fmt.Fprintln(a.out, t.ID)
 				return nil
@@ -629,7 +633,10 @@ func (a *app) newEditCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("Error: %v", err)
 			}
-			return openEditor(path, a.out)
+			if err := openEditor(path, a.out); err != nil {
+				return err
+			}
+			return a.validateEditedTicket(path)
 		},
 	}
 }
@@ -741,6 +748,122 @@ func openEditor(path string, out io.Writer) error {
 	}
 	fmt.Fprintf(out, "Edit ticket file: %s\n", path)
 	return nil
+}
+
+func (a *app) validateEditedTicket(path string) error {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("Error: failed to validate edited ticket: %w", err)
+	}
+
+	raw := string(content)
+	lines := strings.Split(raw, "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
+		return fmt.Errorf("Error: edited ticket is invalid: missing frontmatter")
+	}
+
+	end := -1
+	for i := 1; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == "---" {
+			end = i
+			break
+		}
+	}
+	if end == -1 {
+		return fmt.Errorf("Error: edited ticket is invalid: unclosed frontmatter")
+	}
+
+	for i := 1; i < end; i++ {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		colon := strings.Index(line, ":")
+		if colon <= 0 {
+			return fmt.Errorf("Error: edited ticket is invalid: malformed frontmatter line %d", i+1)
+		}
+	}
+
+	t, err := ticket.ParseTicket(raw)
+	if err != nil {
+		return fmt.Errorf("Error: edited ticket is invalid: %v", err)
+	}
+
+	expectedID := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	if t.ID == "" || t.ID != expectedID {
+		return fmt.Errorf("Error: edited ticket is invalid: id must match file name (%s)", expectedID)
+	}
+
+	if !ticket.IsValidStatus(string(t.Status)) {
+		return fmt.Errorf("Error: edited ticket is invalid: invalid status %q", t.Status)
+	}
+
+	validType := map[string]bool{"bug": true, "feature": true, "task": true, "epic": true, "chore": true}
+	if !validType[t.Type] {
+		return fmt.Errorf("Error: edited ticket is invalid: invalid type %q", t.Type)
+	}
+
+	if t.Created.IsZero() {
+		return fmt.Errorf("Error: edited ticket is invalid: invalid created timestamp")
+	}
+
+	if t.Priority < 0 || t.Priority > 4 {
+		return fmt.Errorf("Error: edited ticket is invalid: priority must be between 0 and 4")
+	}
+
+	for _, dep := range t.Deps {
+		if !isLikelyTicketID(dep) {
+			return fmt.Errorf("Error: edited ticket is invalid: invalid dependency id %q", dep)
+		}
+		if _, err := a.store.ResolveID(dep); err != nil {
+			return fmt.Errorf("Error: edited ticket is invalid: dependency %q not found", dep)
+		}
+	}
+
+	for _, link := range t.Links {
+		if !isLikelyTicketID(link) {
+			return fmt.Errorf("Error: edited ticket is invalid: invalid linked id %q", link)
+		}
+		if _, err := a.store.ResolveID(link); err != nil {
+			return fmt.Errorf("Error: edited ticket is invalid: link %q not found", link)
+		}
+	}
+
+	headline := ""
+	for i := end + 1; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		headline = line
+		break
+	}
+	if !strings.HasPrefix(headline, "# ") || strings.TrimSpace(strings.TrimPrefix(headline, "# ")) == "" {
+		return fmt.Errorf("Error: edited ticket is invalid: first content line must be a non-empty '# ' heading")
+	}
+
+	return nil
+}
+
+func isLikelyTicketID(id string) bool {
+	parts := strings.Split(id, "-")
+	if len(parts) != 2 {
+		return false
+	}
+	if parts[0] == "" || parts[1] == "" {
+		return false
+	}
+	for _, ch := range parts[0] {
+		if (ch < 'a' || ch > 'z') && (ch < '0' || ch > '9') {
+			return false
+		}
+	}
+	for _, ch := range parts[1] {
+		if (ch < 'a' || ch > 'z') && (ch < '0' || ch > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 var helpText = `tk - minimal ticket system with dependency tracking
