@@ -1776,6 +1776,13 @@ Description
 // ============================================================================
 
 func TestEdit(t *testing.T) {
+	t.Run("edit without ID creates a new ticket", func(t *testing.T) {
+		e := newTestEnv(t)
+		e.initTicketsDir()
+		e.run("edit").assertSuccess()
+		e.assertOutputMatchesIDPattern()
+	})
+
 	t.Run("edit in non-TTY shows file path", func(t *testing.T) {
 		e := newTestEnv(t)
 		e.createTicket("edit-0001", "Editable ticket")

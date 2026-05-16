@@ -7,6 +7,11 @@ Feature: Ticket Edit
     Given a clean tickets directory
     And a ticket exists with ID "edit-0001" and title "Editable ticket"
 
+  Scenario: Edit without ID creates a new ticket
+    When I run "ticket edit"
+    Then the command should succeed
+    And the output should match ticket ID pattern
+
   Scenario: Edit in non-TTY mode shows file path
     When I run "ticket edit edit-0001" in non-TTY mode
     Then the command should succeed

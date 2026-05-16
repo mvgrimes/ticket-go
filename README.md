@@ -68,7 +68,7 @@ Commands:
   blocked [-a X] [-T X]    List open/in-progress tickets with unresolved deps
   closed [--limit=N] [-a X] [-T X] [--json] List recently closed tickets (default 20, by mtime)
   show <id> [--json]       Display ticket
-  edit <id>                Open ticket in $EDITOR
+  edit [id]                Open ticket in $EDITOR (or create a new ticket)
   add-note <id> [text]     Append timestamped note (or pipe via stdin)
   query [filter]           Output tickets as JSON (filter: status=open, priority<2, or jq expr)
 
@@ -77,6 +77,8 @@ Supports partial ID matching (e.g., 'tk show 5c4' matches 'nw-5c46')
 ```
 
 When `create` is run without a title, `tk` writes a draft to a temporary file and opens it in `$EDITOR`. If you save changes, the draft is moved into `.tickets/` and the new ticket ID is printed. If unchanged, the draft is discarded.
+
+When `edit` is run without an ID, it behaves like `create` without a title and creates a new ticket.
 
 ## JSON Output
 

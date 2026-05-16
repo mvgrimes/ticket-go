@@ -603,10 +603,28 @@ func (a *app) newShowCmd() *cobra.Command {
 
 func (a *app) newEditCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "edit <id>",
-		Short: "Open ticket in $EDITOR",
-		Args:  cobra.ExactArgs(1),
+		Use:   "edit [id]",
+		Short: "Open ticket in $EDITOR (or create a new ticket)",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				t, err := a.store.Create(ticket.CreateOptions{})
+				if err != nil {
+					return err
+				}
+				if isTerminal(os.Stdin) && isTerminal(os.Stdout) {
+					path, err := a.store.GetTicketPath(t.ID)
+					if err != nil {
+						return fmt.Errorf("Error: %v", err)
+					}
+					if err := openEditor(path, a.out); err != nil {
+						return err
+					}
+				}
+				fmt.Fprintln(a.out, t.ID)
+				return nil
+			}
+
 			path, err := a.store.GetTicketPath(args[0])
 			if err != nil {
 				return fmt.Errorf("Error: %v", err)
@@ -755,7 +773,7 @@ Commands:
   blocked [-a X] [-T X]    List open/in-progress tickets with unresolved deps
   closed [--limit=N] [-a X] [-T X] [--json] List recently closed tickets (default 20, by mtime)
   show <id> [--json]       Display ticket
-  edit <id>                Open ticket in $EDITOR
+  edit [id]                Open ticket in $EDITOR (or create a new ticket)
   add-note <id> [text]     Append timestamped note (or pipe via stdin)
   query [filter]           Output tickets as JSON (filter: status=open, priority<2, or jq expr)
 
