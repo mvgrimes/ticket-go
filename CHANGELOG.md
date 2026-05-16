@@ -12,6 +12,9 @@
 - Go test coverage for all commands including dependency cycles, partial ID resolution, and directory walking
 - `--json` flag for `list`, `ready`, `closed`, and `show` commands with fields: `id`, `title`, `status`, `priority`, `issue_type`, `owner`, `created_at`, `created_by`, `updated_at`, `dependency_count`, `dependent_count`, `comment_count`
 
+### Fixed
+- `create` without a title now uses a temporary draft file in `$EDITOR` and only creates a ticket when the draft is modified
+
 ## [0.3.1] - 2026-01-28
 
 ### Added

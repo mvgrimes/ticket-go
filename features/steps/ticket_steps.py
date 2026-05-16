@@ -207,6 +207,19 @@ Description
     ticket_path.write_text(content)
 
 
+@given(r'an editor script that appends "(?P<text>[^"]+)"')
+def step_editor_script_appends(context, text):
+    """Create an executable editor script that appends text to the file argument."""
+    script_path = Path(context.test_dir) / 'fake_editor.sh'
+    script_path.write_text(
+        '#!/usr/bin/env bash\n'
+        'set -euo pipefail\n'
+        f'printf "\\n{text}\\n" >> "$1"\n'
+    )
+    script_path.chmod(0o755)
+    context.editor_script = str(script_path)
+
+
 # ============================================================================
 # When Steps
 # ============================================================================
@@ -285,6 +298,44 @@ def step_run_command_with_env(context, command, tickets_dir):
     context.stderr = result.stderr.strip()
     context.returncode = result.returncode
     context.last_command = command
+
+
+@when(r'I run "(?P<command>(?:[^"\\]|\\.)+)" with EDITOR set to "(?P<editor>[^"]+)"')
+def step_run_command_with_editor(context, command, editor):
+    """Run a ticket CLI command with EDITOR set."""
+    command = command.replace('\\"', '"')
+    ticket_script = get_ticket_script(context)
+    cmd = command.replace('ticket ', f'{ticket_script} ', 1)
+
+    cwd = getattr(context, 'working_dir', context.test_dir)
+    env = os.environ.copy()
+    env['EDITOR'] = editor
+
+    result = subprocess.run(
+        cmd,
+        shell=True,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        env=env
+    )
+
+    context.result = result
+    context.stdout = result.stdout.strip()
+    context.stderr = result.stderr.strip()
+    context.returncode = result.returncode
+    context.last_command = command
+
+    if 'ticket create' in command and result.returncode == 0 and result.stdout.strip():
+        context.last_created_id = result.stdout.strip()
+
+
+@when(r'I run "(?P<command>(?:[^"\\]|\\.)+)" with the fake editor')
+def step_run_command_with_fake_editor(context, command):
+    """Run a ticket CLI command with the generated fake editor script."""
+    assert hasattr(context, 'editor_script'), 'No fake editor script found; use the setup Given step first.'
+    step_run_command_with_editor(context, command, context.editor_script)
 
 
 @when(r'I run "(?P<command>(?:[^"\\]|\\.)+)"')

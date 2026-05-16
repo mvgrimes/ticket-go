@@ -12,11 +12,18 @@ Feature: Ticket Creation
     And the output should match a ticket ID pattern
     And a ticket file should exist with title "My first ticket"
 
-  Scenario: Create a ticket with default title
-    When I run "ticket create"
+  Scenario: Create without title does not save when unchanged
+    When I run "ticket create" with EDITOR set to "true"
+    Then the command should succeed
+    And the output should be empty
+
+  Scenario: Create without title saves when edited
+    Given an editor script that appends "Draft details"
+    When I run "ticket create" with the fake editor
     Then the command should succeed
     And the output should match a ticket ID pattern
     And a ticket file should exist with title "Untitled"
+    And the created ticket should contain "Draft details"
 
   Scenario: Create a ticket with description
     When I run "ticket create 'Test ticket' -d 'This is the description'"

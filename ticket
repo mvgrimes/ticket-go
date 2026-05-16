@@ -185,12 +185,73 @@ cmd_create() {
         parent=$(basename "$parent_file" .md)
     fi
 
-    title="${title:-Untitled}"
     local id
     id=$(generate_id)
-    local file="$TICKETS_DIR/${id}.md"
     local now
     now=$(_iso_date)
+
+    # Create without a title by editing a temporary draft first.
+    # If the draft is unchanged, discard it and do not create a ticket file.
+    if [[ -z "$title" ]]; then
+        local tmp_file
+        tmp_file=$(mktemp "${TMPDIR:-/tmp}/tk-create-${id}.XXXXXX.md") || return 1
+        local file="$TICKETS_DIR/${id}.md"
+
+        {
+            echo "---"
+            echo "id: $id"
+            echo "status: open"
+            echo "deps: []"
+            echo "links: []"
+            echo "created: $now"
+            echo "type: $issue_type"
+            echo "priority: $priority"
+            [[ -n "$assignee" ]] && echo "assignee: $assignee"
+            [[ -n "$external_ref" ]] && echo "external-ref: $external_ref"
+            [[ -n "$parent" ]] && echo "parent: $parent"
+            if [[ -n "$tags" ]]; then
+                echo "tags: [${tags//,/, }]"
+            fi
+            echo "---"
+            echo "# Untitled"
+            echo ""
+            if [[ -n "$description" ]]; then
+                echo "$description"
+                echo ""
+            fi
+            if [[ -n "$design" ]]; then
+                echo "## Design"
+                echo ""
+                echo "$design"
+                echo ""
+            fi
+            if [[ -n "$acceptance" ]]; then
+                echo "## Acceptance Criteria"
+                echo ""
+                echo "$acceptance"
+                echo ""
+            fi
+        } > "$tmp_file"
+
+        local before after
+        before=$(cksum < "$tmp_file")
+        "${EDITOR:-vi}" "$tmp_file" || {
+            rm -f "$tmp_file"
+            return 1
+        }
+        after=$(cksum < "$tmp_file")
+
+        if [[ "$before" != "$after" ]]; then
+            mv "$tmp_file" "$file"
+            echo "$id"
+        else
+            rm -f "$tmp_file"
+        fi
+        return 0
+    fi
+
+    title="${title:-Untitled}"
+    local file="$TICKETS_DIR/${id}.md"
 
     {
         echo "---"
@@ -1438,7 +1499,7 @@ $cmd - minimal ticket system with dependency tracking
 Usage: $cmd <command> [args]
 
 Commands:
-  create [title] [options] Create ticket, prints ID
+  create [title] [options] Create ticket (no title opens draft in \$EDITOR)
     -d, --description      Description text
     --design               Design notes
     --acceptance           Acceptance criteria
