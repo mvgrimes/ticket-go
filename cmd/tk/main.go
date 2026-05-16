@@ -140,6 +140,10 @@ func (a *app) newCreateCmd() *cobra.Command {
 				opts.Tags = strings.Split(tagsStr, ",")
 			}
 
+			if opts.Title == "" && (!isTerminal(os.Stdin) || !isTerminal(os.Stdout)) {
+				return fmt.Errorf("title is required in non-interactive mode")
+			}
+
 			t, err := a.store.Create(opts)
 			if err != nil {
 				return err

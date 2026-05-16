@@ -554,6 +554,7 @@ func TestCreate(t *testing.T) {
 		wantField    string
 		wantValue    string
 		wantContains string
+		wantErr      string
 	}{
 		{
 			name:      "basic ticket with title",
@@ -561,9 +562,9 @@ func TestCreate(t *testing.T) {
 			wantTitle: "My first ticket",
 		},
 		{
-			name:      "ticket with default title",
-			args:      []string{"create"},
-			wantTitle: "Untitled",
+			name:         "create without title fails in non-interactive mode",
+			args:         []string{"create"},
+			wantErr:      "title is required in non-interactive mode",
 		},
 		{
 			name:         "ticket with description",
@@ -610,7 +611,12 @@ func TestCreate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			e := newTestEnv(t)
 			e.initTicketsDir()
-			e.run(tt.args...).assertSuccess().assertOutputMatchesIDPattern()
+			e.run(tt.args...)
+			if tt.wantErr != "" {
+				e.assertFail().assertOutputContains(tt.wantErr)
+				return
+			}
+			e.assertSuccess().assertOutputMatchesIDPattern()
 
 			if tt.wantTitle != "" {
 				e.assertCreatedTicketHasTitle(tt.wantTitle)

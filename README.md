@@ -43,7 +43,7 @@ tk - minimal ticket system with dependency tracking
 Usage: tk <command> [args]
 
 Commands:
-  create [title] [options] Create ticket (no title opens a temp draft in $EDITOR)
+  create [title] [options] Create ticket (no title opens a temp draft in $EDITOR when interactive)
     -d, --description      Description text
     --design               Design notes
     --acceptance           Acceptance criteria
@@ -76,7 +76,7 @@ Searches parent directories for .tickets/ (override with TICKETS_DIR env var)
 Supports partial ID matching (e.g., 'tk show 5c4' matches 'nw-5c46')
 ```
 
-When `create` is run without a title, `tk` writes a draft to a temporary file and opens it in `$EDITOR`. If you save changes, the draft is moved into `.tickets/` and the new ticket ID is printed. If unchanged, the draft is discarded.
+When `create` is run without a title in an interactive terminal, `tk` writes a draft to a temporary file and opens it in `$EDITOR`. If you save changes, the draft is moved into `.tickets/` and the new ticket ID is printed. If unchanged, the draft is discarded. In non-interactive mode, `create` without a title returns an error.
 
 When `edit` is run without an ID, it behaves like `create` without a title and creates a new ticket.
 
