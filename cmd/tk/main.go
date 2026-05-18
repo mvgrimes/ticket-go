@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,7 +15,7 @@ import (
 	"golang.org/x/term"
 )
 
-var version = "0.4.6"
+var version = "0.4.7"
 
 // Global writers for output - can be overridden in tests
 var (
@@ -153,7 +154,7 @@ func (a *app) newCreateCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("Error: %v", err)
 				}
-				if err := openEditor(path, a.out); err != nil {
+				if err := a.editAndValidateWithTitleRecovery(path); err != nil {
 					return err
 				}
 			}
@@ -622,11 +623,10 @@ func (a *app) newEditCmd() *cobra.Command {
 					return fmt.Errorf("Error: %v", err)
 				}
 				if isTerminal(os.Stdin) && isTerminal(os.Stdout) {
-					if err := openEditor(path, a.out); err != nil {
+					if err := a.editAndValidateWithTitleRecovery(path); err != nil {
 						return err
 					}
-				}
-				if err := a.validateEditedTicket(path); err != nil {
+				} else if err := a.validateEditedTicket(path); err != nil {
 					return err
 				}
 				fmt.Fprintln(a.out, t.ID)
@@ -637,10 +637,7 @@ func (a *app) newEditCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("Error: %v", err)
 			}
-			if err := openEditor(path, a.out); err != nil {
-				return err
-			}
-			return a.validateEditedTicket(path)
+			return a.editAndValidateWithTitleRecovery(path)
 		},
 	}
 }
@@ -752,6 +749,100 @@ func openEditor(path string, out io.Writer) error {
 	}
 	fmt.Fprintf(out, "Edit ticket file: %s\n", path)
 	return nil
+}
+
+func (a *app) editAndValidateWithTitleRecovery(path string) error {
+	interactive := isTerminal(os.Stdin) && isTerminal(os.Stdout)
+	for {
+		if err := openEditor(path, a.out); err != nil {
+			return err
+		}
+		err := a.validateEditedTicket(path)
+		if err == nil {
+			return nil
+		}
+		if !interactive || !isMissingTitleError(err) {
+			return err
+		}
+
+		fmt.Fprintln(a.out, err)
+		choice, promptErr := promptTitleRecoveryChoice()
+		if promptErr != nil {
+			return promptErr
+		}
+		if choice == "edit" {
+			continue
+		}
+		if err := setTicketHeading(path, "Untitled"); err != nil {
+			return fmt.Errorf("Error: failed to apply default title: %w", err)
+		}
+		return a.validateEditedTicket(path)
+	}
+}
+
+func promptTitleRecoveryChoice() (string, error) {
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		fmt.Fprint(stdout, "Ticket title is missing. [e]dit again or [c]reate anyway with title 'Untitled'? ")
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				return "edit", nil
+			}
+			return "", fmt.Errorf("Error: failed to read response: %w", err)
+		}
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "e", "edit":
+			return "edit", nil
+		case "c", "create":
+			return "create", nil
+		}
+	}
+}
+
+func isMissingTitleError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "first content line must be a non-empty '# ' heading")
+}
+
+func setTicketHeading(path, title string) error {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(string(content), "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
+		return fmt.Errorf("missing frontmatter")
+	}
+	end := -1
+	for i := 1; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == "---" {
+			end = i
+			break
+		}
+	}
+	if end == -1 {
+		return fmt.Errorf("unclosed frontmatter")
+	}
+
+	insertAt := end + 1
+	for i := end + 1; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == "" {
+			continue
+		}
+		insertAt = i
+		break
+	}
+	if insertAt >= len(lines) {
+		lines = append(lines, "# "+title)
+	} else {
+		lines[insertAt] = "# " + title
+	}
+
+	updated := strings.Join(lines, "\n")
+	return os.WriteFile(path, []byte(updated), 0644)
 }
 
 func (a *app) validateEditedTicket(path string) error {

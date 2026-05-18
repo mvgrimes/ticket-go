@@ -562,9 +562,9 @@ func TestCreate(t *testing.T) {
 			wantTitle: "My first ticket",
 		},
 		{
-			name:         "create without title fails in non-interactive mode",
-			args:         []string{"create"},
-			wantErr:      "title is required in non-interactive mode",
+			name:    "create without title fails in non-interactive mode",
+			args:    []string{"create"},
+			wantErr: "title is required in non-interactive mode",
 		},
 		{
 			name:         "ticket with description",
